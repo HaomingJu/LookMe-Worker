@@ -747,9 +747,9 @@ Python urllib 的 timeout 限制阻塞 I/O 等待，不是整次请求的统一�
 
 D1/R2 直接检查仅由管理员执行，客户端不需要管理权限。当前没有公开图片下载、列表、删除或漫画任务 API，也没有自动 TTL 清理；保留策略及后续接口必须另行约定。
 
-## 7. 多张照片加速上传（C++）
+## 7. 多张照片加速上传
 
-`upload_batch_cpp` 使用同一进程的 libcurl multi 连接池，**每次最多并发8张**。每张仍是独立 `POST /photos` 请求；不要在一个请求中重复提交多个 file 字段。当前只实现 C++ 批量客户端，其他语言仍为单张客户端。
+`upload_batch_cpp` 使用同一进程的 libcurl multi 连接池，**每次最多并发8张**。每张仍是独立 `POST /photos` 请求；不要在一个请求中重复提交多个 file 字段。C、C++、JavaScript、Python和curl均提供独立批量调度，统一最多8并发和可恢复状态，不依赖C++来包装其他语言。
 
 ### 构建与首次调用
 
@@ -806,3 +806,26 @@ npm run test:batch
 ```
 
 覆盖8并发、持久连接复用、部分失败/中断恢复、自动状态创建与权限、UUID稳定、文件变化及锁保护。更多细节见 [BATCH.md](test/clients/BATCH.md)。这不改变单张2MiB、2048px及请求3MiB的限制，也不保证所有网络都有8倍吞吐率。
+
+### 各语言原生批量调用
+
+以下均采用默认自定义域并会真实上传；每种第一次运行会建立新的批次，不要依次运行这五条来重试同一批次：
+
+```bash
+test/clients/build/upload_batch_c '/受限目录/用户.token' ./photo-a.jpg ./photo-b.jpg
+test/clients/build/upload_batch_cpp '/受限目录/用户.token' ./photo-a.jpg ./photo-b.jpg
+node test/clients/upload_batch.mjs '/受限目录/用户.token' ./photo-a.jpg ./photo-b.jpg
+python3 -I test/clients/upload_batch.py '/受限目录/用户.token' ./photo-a.jpg ./photo-b.jpg
+bash test/clients/upload_batch.sh '/受限目录/用户.token' ./photo-a.jpg ./photo-b.jpg
+```
+
+每个程序都支持 `--help` 和 `--state`。恢复示例：
+
+```bash
+node test/clients/upload_batch.mjs --state '/原批次/js-batch-UUID.upload-state' '/受限目录/用户.token'
+python3 -I test/clients/upload_batch.py --state '/原批次/py-batch-UUID.upload-state' '/受限目录/用户.token'
+bash test/clients/upload_batch.sh --state '/原批次/curl-batch-UUID.upload-state' '/受限目录/用户.token'
+test/clients/build/upload_batch_c --state '/原批次/c-batch-UUID.upload-state' '/受限目录/用户.token'
+```
+
+Python/JS/curl共用JSON状态，允许保持服务和Token路径一致时跨三种语言恢复；C/C++状态格式不同，不能混用。Node需要项目undici依赖，Python不需要第三方库，curl批量由一个curl parallel进程完成传输，Python只管理状态。单张及批次统计口径见BATCH.md。完整本地验收：`npm run test:batch:all`，不会访问Cloudflare。

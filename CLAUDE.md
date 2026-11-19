@@ -28,6 +28,7 @@ npm run typecheck         # tsc --noEmit；仅覆盖 src/**/*.ts
 npm test                  # Vitest 全部测试，不连接远端
 npm run test:clients      # 五语言本地协议测试；需要 CMake、libcurl、C/C++、curl 和 Python 3
 npm run test:batch        # C++ 批量上传的8并发、连接复用及恢复协议测试
+npm run test:batch:all    # C/C++/JS/Python/curl 独立批量实现回归
 npm test -- test/upload.test.ts
 npm test -- test/upload.test.ts -t "不同用户"
 npm test -- test/users.test.ts -t "签发仅写哈希"
@@ -44,7 +45,7 @@ npm run build             # wrangler deploy --env dev --dry-run，不上线
 
 `test/clients/` 是五语言可执行上传客户端及本地协议回归工具。C/C++ 的 CMake 构建、临时 mock 服务和 40 项上传协议及参数/帮助检查由 `verify.py` 管理；这是传输测试，不取代上述 D1/R2 集成测试，也不自动运行远端测试。
 
-`upload_batch_cpp` 是独立批量客户端，不修改 Worker API；libcurl multi 最多8并发，首次自动在用户主目录创建受限批次文件并输出 STATE_FILE，保存每张UUID和完成状态；失败时用 --state 恢复原文件，而非生成新UUID。用 `verify_batch.py` 本地验证并发/连接复用、失败及中断恢复；具体命令见 `test/clients/BATCH.md`。
+`upload_batch_cpp` 是独立批量客户端，不修改 Worker API；libcurl multi 最多8并发，首次自动在用户主目录创建受限批次文件并输出 STATE_FILE，保存每张UUID和完成状态；失败时用 --state 恢复原文件，而非生成新UUID。用 `verify_batch.py` 本地验证并发/连接复用、失败及中断恢复；具体命令见 `test/clients/BATCH.md`。C有独立libcurl multi实现，JS用undici连接池，Python用持久连接线程池，curl用parallel进程；脚本不包装C++。Python/JS/curl共享JSON状态格式，C和C++各自格式不同。
 
 ## 本地身份与管理工具
 

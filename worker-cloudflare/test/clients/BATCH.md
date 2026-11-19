@@ -77,3 +77,60 @@ npm run test:batch
 用临时 HTTP/1.1 服务和12张合成JPEG检查：最大8并发、连接复用、部分失败恢复、稳定UUID、跳过已成功照片、权限/文件变化/锁保护及中断恢复。无远端请求；mock不验证真实D1/R2或完整JPEG解码。真实存储行为仍由原 `npm test` 验证。
 
 真实上传返回0表示本批次全部确认成功；返回1表示部分失败或未确认。恢复必须用 --state 指定原状态文件，不能为同一失败批次重新创建一组UUID。
+
+## 其他语言的独立批量实现
+
+以下不是 C++ 包装器，各自运行独立的网络调度：
+
+| 程序 | 传输与连接复用 | 依赖 |
+| --- | --- | --- |
+| `upload_batch_c` | 原生C/libcurl multi，最多8请求/连接 | C11、libcurl、uuidgen，CMake构建 |
+| `upload_batch.mjs` | Node undici连接池，8个异步任务 | Node及 `npm ci` 安装的undici，不需要CMake |
+| `upload_batch.py` | 8线程，线程内持久HTTP/HTTPS连接 | Python3标准库，不需要CMake |
+| `upload_batch.sh` | 单个curl parallel进程，最多8传输 | curl7.75+、Bash、Python3；Python仅管理状态/配置，不调用C++ |
+
+C构建：
+
+```bash
+cmake --build test/clients/build --config Release --target upload_batch_c
+```
+
+首次调用（默认开发域，会真实写入，先确认图片授权）：
+
+```bash
+test/clients/build/upload_batch_c '/受限目录/用户.token' ./photo-a.jpg ./photo-b.jpg
+node test/clients/upload_batch.mjs '/受限目录/用户.token' ./photo-a.jpg ./photo-b.jpg
+python3 -I test/clients/upload_batch.py '/受限目录/用户.token' ./photo-a.jpg ./photo-b.jpg
+bash test/clients/upload_batch.sh '/受限目录/用户.token' ./photo-a.jpg ./photo-b.jpg
+```
+
+需要本地地址时放在Token路径前。每个程序都支持 `--help`、自动创建状态和 `--state` 恢复，例如：
+
+```bash
+node test/clients/upload_batch.mjs --state '/上次输出/js-batch-UUID.upload-state' '/受限目录/用户.token'
+python3 -I test/clients/upload_batch.py --state '/上次输出/py-batch-UUID.upload-state' '/受限目录/用户.token'
+bash test/clients/upload_batch.sh --state '/上次输出/curl-batch-UUID.upload-state' '/受限目录/用户.token'
+test/clients/build/upload_batch_c --state '/上次输出/c-batch-UUID.upload-state' '/受限目录/用户.token'
+```
+
+状态格式：
+- Python、JS、curl 使用 `LOOKME_NATIVE_BATCH_V1` JSON，可在同一机器/用户/服务/Token文件路径下跨这三种客户端恢复。
+- C使用 `LOOKME_C_BATCH_V1`，C++使用 `LOOKME_BATCH_V1`；两者与脚本状态格式不同，不能混用。
+- 不自动转换状态，不通过重新生成UUID“恢复”。全部路径、大小和修改时间检查仍生效。
+
+每张的状态/响应/大小/耗时/速率和批次成功数都会显示。C/curl统计真实libcurl上传速率（含multipart）；Python/JS是端到端有效速率（含服务端处理），不是纯网络带宽，也不适合直接同口径横向比较。
+
+C/curl/JS支持代理环境变量；Python持久连接目前支持HTTP代理的CONNECT，未实现SOCKS/HTTPS代理转发。Python中断停止继续调度，但正在进行的阻塞请求需等待响应/超时收尾；Node使用取消信号中断请求。任何在途请求都可能已被服务端接受，应通过原UUID恢复确认。
+
+完整原生批量验收：
+
+```bash
+npm run test:batch:all
+# 单独运行，不依赖其他客户端构建：
+python3 -I test/clients/verify_batch.py --language python
+python3 -I test/clients/verify_batch.py --language js
+python3 -I test/clients/verify_batch.py --language curl
+python3 -I test/clients/verify_batch.py --language c
+```
+
+这些检查仅用本地合成图。跨平台行为尤其Windows尚未实机验证。

@@ -117,3 +117,7 @@ npm run test:clients
 ## 加速多张照片：C++ 批量客户端
 
 新增 `upload_batch_cpp`，同一进程最多并发 **8 张**，复用连接，每张独立UUID，自动创建本地受限状态文件，输出 STATE_FILE，恢复时用 --state 指定原文件并跳过已成功照片。构建、首次上传/恢复命令和限制见 [BATCH.md](BATCH.md)；本地验证：`npm run test:batch`。默认域名为已配置的 `https://api.fudaixuexue.eu.cc`，不修改旧单张客户端。
+
+## 全语言原生批量客户端
+
+现已新增 `upload_batch_c`、`upload_batch.mjs`、`upload_batch.py` 和 `upload_batch.sh`，均为独立网络实现，不调用C++程序。统一8并发、连接复用、自动受限状态、原UUID恢复及摘要。详见 [BATCH.md](BATCH.md)；验收 `npm run test:batch:all`。Python/JS/curl的JSON状态可相互恢复；C/C++各自状态格式不能混用。Node依赖项目精确版本undici；Python为标准库，curl脚本依赖Python状态管理及curl7.75+。

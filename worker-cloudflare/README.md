@@ -110,6 +110,6 @@ npm run deploy:dev
 
 完整 API 契约及 C/C++、JavaScript、Python、curl 实际示例见 [USAGE.md](USAGE.md)。单张协议测试执行 `npm run test:clients`；C++ 八并发、连接复用及恢复测试执行 `npm run test:batch`，均使用本地 mock，不上传远端。
 
-`upload_batch_cpp` 首次只需 Token 文件及 JPEG 列表，自动创建受限状态并输出 STATE_FILE；失败后使用 `--state` 指定原文件恢复，跳过成功照片并保留 UUID。用法、CMake 构建和状态限制见 [BATCH.md](test/clients/BATCH.md)。其他语言的批量调度尚未实现，Worker 仍为每请求一张照片。
+`upload_batch_cpp` 首次只需 Token 文件及 JPEG 列表，自动创建受限状态并输出 STATE_FILE；失败后使用 `--state` 指定原文件恢复，跳过成功照片并保留 UUID。用法、CMake 构建和状态限制见 [BATCH.md](test/clients/BATCH.md)。C、C++、JavaScript、Python和curl均有独立批量实现；统一最多8并发和原UUID恢复，Worker仍为每请求一张照片。所有原生批量协议测试执行 `npm run test:batch:all`。
 
 开发环境已配置 `api.fudaixuexue.eu.cc` 自定义域；单张客户端仍可覆盖 Base URL，批量客户端默认使用该域。更换账号/域名时以当前 Wrangler 配置及部署返回值为准。部署 Skill 会先确认是否使用自定义域，不自动覆盖主站或删除已有域名。
