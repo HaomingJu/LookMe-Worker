@@ -8,6 +8,13 @@
   "env": {
     "dev": {
       "name": "lookme-api-dev",
+      "routes": [
+        {
+          "pattern": "api.fudaixuexue.eu.cc",
+          "custom_domain": true,
+          "zone_id": "ad14ac2a1d1f349624f8008f963945dc"
+        }
+      ],
       "d1_databases": [
         {
           "binding": "DB",

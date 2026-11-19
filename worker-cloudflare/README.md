@@ -105,3 +105,11 @@ npm run deploy:dev
 不要在未授权时执行以上远端命令。用户凭据不再通过 Worker Secret 注入；若远端仍有旧 UPLOAD_TOKEN，代码会忽略它，撤销/删除另行确认。不同环境独立签发 Token；换账号不复制凭据表或秘密。
 
 `npm run build` 仅打包，不部署。纯 JS JPEG 解码可能触及套餐 CPU 上限，本地通过不保证所有大图在免费套餐可用；不自动升级套餐。
+
+## 客户端对接与批量上传
+
+完整 API 契约及 C/C++、JavaScript、Python、curl 实际示例见 [USAGE.md](USAGE.md)。单张协议测试执行 `npm run test:clients`；C++ 八并发、连接复用及恢复测试执行 `npm run test:batch`，均使用本地 mock，不上传远端。
+
+`upload_batch_cpp` 首次只需 Token 文件及 JPEG 列表，自动创建受限状态并输出 STATE_FILE；失败后使用 `--state` 指定原文件恢复，跳过成功照片并保留 UUID。用法、CMake 构建和状态限制见 [BATCH.md](test/clients/BATCH.md)。其他语言的批量调度尚未实现，Worker 仍为每请求一张照片。
+
+开发环境已配置 `api.fudaixuexue.eu.cc` 自定义域；单张客户端仍可覆盖 Base URL，批量客户端默认使用该域。更换账号/域名时以当前 Wrangler 配置及部署返回值为准。部署 Skill 会先确认是否使用自定义域，不自动覆盖主站或删除已有域名。

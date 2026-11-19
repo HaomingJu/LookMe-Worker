@@ -27,6 +27,7 @@ def run(command, **kwargs):
 
 def main():
     records = {}
+    requests = []
     with tempfile.TemporaryDirectory(prefix='lookme-client-tests-') as folder:
         root = Path(folder)
         build = root / 'build'
@@ -45,6 +46,7 @@ def main():
                 pass
 
             def do_POST(self):
+                requests.append(self.path)
                 status, body = 400, {'error': 'invalid_fields'}
                 try:
                     # 完整读取请求，避免负向鉴权测试中客户端仍发送正文时连接被提前关闭。
@@ -111,30 +113,41 @@ def main():
                     args = [base, str(root/credential), str(root/image), client_id] if positional else []
                     try:
                         result = run(command+args, env=env)
-                        if name == 'C++' and status in (200, 201):
+                        if status in (200, 201):
                             for text in ['上传成功', '文件路径：', '文件大小：', '请求耗时：', '平均上传速度：', 'KiB/s']:
                                 assert text in result.stdout, text
-                            assert str(root/image) in result.stdout
+                            assert str(root/image) in result.stdout or str((root/image).resolve()) in result.stdout
                             assert f"{(root/image).stat().st_size} 字节" in result.stdout
                             assert TOKEN not in result.stdout
                     except RuntimeError as error:
                         raise RuntimeError(f"{name} 期望 {status}：{error}") from error
                 print(f'{name}：201/200/409/401/415/413 本地协议测试通过')
-            cpp = [str(binary_dir/('upload_cpp'+suffix))]
-            env = {**os.environ, 'EXPECT_STATUS': '201'}
-            generated = run(cpp+[base, str(root/'test.token'), str(root/'image.jpg')], env=env)
-            match = re.search(r'CLIENT_PHOTO_ID=([0-9a-fA-F-]{36})', generated.stdout)
-            assert match, '自动生成的 UUID 未输出'
-            generated_id = match.group(1)
-            uuid.UUID(generated_id)
-            assert generated_id in records
-            retry = run(cpp+[base, str(root/'test.token'), str(root/'image.jpg'), generated_id], env={**env, 'EXPECT_STATUS': '200'})
-            assert '幂等重传' in retry.stdout
-            print('C++：uuidgen 自动生成、显式重传及耗时/大小/路径/速度摘要通过')
+            for name, command, positional in programs:
+                env = {**os.environ, 'EXPECT_STATUS': '201'}
+                generated = run(command+[base, str(root/'test.token'), str(root/'image.jpg')], env=env)
+                match = re.search(r'CLIENT_PHOTO_ID=([0-9a-fA-F-]{36})', generated.stdout)
+                assert match, f'{name} 自动生成的 UUID 未输出'
+                generated_id = match.group(1)
+                uuid.UUID(generated_id)
+                assert generated_id in records
+                retry = run(command+[base, str(root/'test.token'), str(root/'image.jpg'), generated_id], env={**env, 'EXPECT_STATUS': '200'})
+                assert '幂等重传' in retry.stdout
+                before = len(requests)
+                help_result = run(command+['--help'], env={**os.environ, 'EXPECT_STATUS': 'invalid'})
+                for text in ['BASE_URL', 'TOKEN_FILE', 'JPEG_FILE', 'CLIENT_PHOTO_ID', '2 MiB', '2048 px', '3 MiB', '速度', 'https://lookme-api-dev.sunnyhaoming.workers.dev']:
+                    assert text in help_result.stdout, (name, text)
+                assert 'CLIENT_PHOTO_ID=' not in help_result.stdout
+                invalid = subprocess.run(command+[base, '/nonexistent-lookme-token', str(root/'image.jpg'), '1'], capture_output=True, text=True, env=env, timeout=30)
+                assert invalid.returncode != 0 and '必须为 UUID' in invalid.stderr
+                default = subprocess.run(command+['/nonexistent-lookme-token', str(root/'image.jpg')], capture_output=True, text=True, env=env, timeout=30)
+                assert default.returncode != 0 and re.search(r'CLIENT_PHOTO_ID=([0-9a-fA-F-]{36})', default.stdout)
+                assert len(requests) == before, f'{name} 帮助/无效参数/缺失凭据不应发请求'
+                print(f'{name}：自动 UUID、显式重传、默认参数、--help、无效 UUID 拒绝及上传摘要通过')
+            assert len(requests) == 40
         finally:
             server.shutdown()
             server.server_close()
-    print('全部 32 项客户端测试通过；构建、合成图与夹具凭据仅存于已清理的临时目录。')
+    print('全部 40 项上传协议测试及五语言参数/帮助检查通过；构建、合成图与夹具凭据仅存于已清理的临时目录。')
 
 
 if __name__ == '__main__':
