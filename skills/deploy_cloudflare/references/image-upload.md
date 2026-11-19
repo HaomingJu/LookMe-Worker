@@ -1,6 +1,6 @@
 # LookMe 图片上传协议（Demo）
 
-本页是实现约定；路由尚未实现或部署时，示例不能直接运行。先用授权测试图和假模型验证，Apple App、硬件和 R2 直传之后接入。
+`POST /photos` 已在 `worker-cloudflare/` 实现并通过本地测试，尚未部署。下文建单、查询和下载仍是实现约定，尚未实现；不可将其示例视为可用接口。部署步骤见 [上传 Worker 部署 Skill](../../deploy_worker/SKILL.md)。Apple App、硬件和 R2 直传之后接入。
 
 ## 图片准备
 

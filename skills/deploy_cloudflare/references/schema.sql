@@ -1,4 +1,4 @@
--- LookMe Demo D1 初始迁移模板；发布前对照现有迁移。
+-- LookMe D1 当前完整结构快照（0001 + 0002）；已有库只应用缺失的版本化迁移。
 -- 时间统一为 UTC Unix 毫秒；owner_id 来自认证，不接受客户端自报。
 CREATE TABLE photos (
   photo_id TEXT PRIMARY KEY NOT NULL,
@@ -69,3 +69,28 @@ CREATE TABLE job_dispatch (
 );
 
 CREATE INDEX job_dispatch_pending ON job_dispatch(dispatch_after_ms) WHERE published_at_ms IS NULL;
+
+-- 保留已有照片/任务归属；不重建已有业务表，不为历史 owner 自动签发凭据。
+CREATE TABLE users (
+  user_id TEXT PRIMARY KEY NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'disabled')),
+  created_at_ms INTEGER NOT NULL
+);
+
+INSERT INTO users (user_id, created_at_ms)
+SELECT owner_id, MIN(created_at_ms) FROM (
+  SELECT owner_id, uploaded_at_ms AS created_at_ms FROM photos
+  UNION ALL
+  SELECT owner_id, created_at_ms FROM comic_jobs
+) GROUP BY owner_id;
+
+CREATE TABLE user_tokens (
+  token_id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(user_id) ON DELETE RESTRICT,
+  token_hash TEXT NOT NULL UNIQUE CHECK(length(token_hash) = 64 AND token_hash NOT GLOB '*[^0-9a-f]*'),
+  created_at_ms INTEGER NOT NULL,
+  expires_at_ms INTEGER NOT NULL CHECK(expires_at_ms > created_at_ms),
+  revoked_at_ms INTEGER
+);
+
+CREATE INDEX user_tokens_user ON user_tokens(user_id);

@@ -1,0 +1,25 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "lookme-api",
+  "account_id": "4bc883fc791d8706160792e5f7b78b64",
+  "compatibility_date": "2026-11-19",
+  "main": "src/index.ts",
+  // 远端资源仅在 --env dev 时绑定。
+  "env": {
+    "dev": {
+      "name": "lookme-api-dev",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "lookme-dev",
+          "database_id": "8ca73bf2-a8d9-4d17-a393-105a9f63622d",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": [
+        { "binding": "PHOTOS", "bucket_name": "lookme-dev-photos" },
+        { "binding": "COMICS", "bucket_name": "lookme-dev-comics" }
+      ]
+    }
+  }
+}

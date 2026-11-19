@@ -1,0 +1,25 @@
+{
+  "name": "lookme-worker-cloudflare",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "db:migrate:local": "wrangler d1 migrations apply lookme-dev --local --config wrangler.local.jsonc",
+    "dev": "wrangler dev --config wrangler.local.jsonc",
+    "typecheck": "tsc",
+    "test": "vitest run",
+    "build": "wrangler deploy --env dev --dry-run",
+    "deploy:dev": "wrangler deploy --env dev",
+    "users": "node scripts/users.mjs"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261119.1",
+    "esbuild": "0.28.2",
+    "miniflare": "5.20261118.0-beta",
+    "typescript": "7.0.2",
+    "vitest": "4.1.12",
+    "wrangler": "4.165.0"
+  },
+  "dependencies": {
+    "jpeg-js": "0.4.4"
+  }
+}

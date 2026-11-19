@@ -45,6 +45,20 @@ erDiagram
         TEXT captured_at_source "nullable"
         INTEGER uploaded_at_ms "NOT NULL"
     }
+    user_tokens {
+        TEXT token_id PK,UK "NOT NULL"
+        TEXT user_id FK "NOT NULL"
+        TEXT token_hash UK "NOT NULL"
+        INTEGER created_at_ms "NOT NULL"
+        INTEGER expires_at_ms "NOT NULL"
+        INTEGER revoked_at_ms "nullable"
+    }
+    users {
+        TEXT user_id PK,UK "NOT NULL"
+        TEXT status "NOT NULL"
+        INTEGER created_at_ms "NOT NULL"
+    }
     photos ||..o{ comic_job_photos : "owner_id, photo_id / DELETE RESTRICT"
     comic_jobs ||..o{ comic_job_photos : "owner_id, job_id / DELETE CASCADE"
     comic_jobs ||..o| job_dispatch : "job_id / DELETE CASCADE"
+    users ||..o{ user_tokens : "user_id / DELETE RESTRICT"

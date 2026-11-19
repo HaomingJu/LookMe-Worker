@@ -1,0 +1,19 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "lookme-api-local",
+  "compatibility_date": "2026-11-19",
+  "main": "src/index.ts",
+  // 仅供 --local 验证；此 ID 是占位符，不是远端数据库 ID。
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "lookme-dev",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    { "binding": "PHOTOS", "bucket_name": "lookme-dev-photos" },
+    { "binding": "COMICS", "bucket_name": "lookme-dev-comics" }
+  ]
+}

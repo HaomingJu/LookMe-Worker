@@ -19,7 +19,9 @@
 
 ## D1
 
-[初始迁移模板](schema.sql)：
+[当前完整结构快照](schema.sql)（版本化迁移为 `0001_initial.sql` + `0002_user_tokens.sql`）：
+
+- `users` / `user_tokens`：独立用户及凭据哈希；Token 由受控 CLI 随机签发，明文仅存受限文件。请求从未撤销、未过期凭据及 active 用户解析 owner；旧共享 Worker Token 不再使用。历史 owner 补建用户但不自动签发凭据。详见 [部署 Skill](../../deploy_worker/SKILL.md)。
 
 - `photos`：保存对象位置、SHA-256、图像尺寸、拍摄时间来源与上传时间；每个 owner 下的 `client_photo_id` 唯一。拍摄时间未知就留空，不使用上传时间代替。
 - `comic_jobs`：记录状态、幂等键、请求摘要、服务端固定的提示词版本和生成参数快照、租约、模型提交标记和成品路径。查询必须带 owner 条件。
