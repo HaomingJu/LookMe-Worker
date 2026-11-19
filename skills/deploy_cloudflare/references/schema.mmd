@@ -1,0 +1,50 @@
+erDiagram
+    comic_job_photos {
+        TEXT owner_id FK "NOT NULL"
+        TEXT job_id PK,FK "NOT NULL"
+        TEXT photo_id FK "NOT NULL"
+        INTEGER position PK "NOT NULL"
+    }
+    comic_jobs {
+        TEXT job_id PK,UK "NOT NULL"
+        TEXT owner_id "NOT NULL"
+        TEXT client_job_id "NOT NULL"
+        TEXT request_hash "NOT NULL"
+        TEXT prompt_version "NOT NULL"
+        TEXT generation_config_json "NOT NULL"
+        TEXT status "NOT NULL"
+        INTEGER attempt_count "NOT NULL"
+        TEXT lease_token "nullable"
+        INTEGER lease_until_ms "nullable"
+        INTEGER provider_submitted_at_ms "nullable"
+        TEXT provider_attempt_id "nullable"
+        TEXT provider_request_id "nullable"
+        TEXT result_object_key UK "nullable"
+        TEXT error_code "nullable"
+        INTEGER created_at_ms "NOT NULL"
+        INTEGER updated_at_ms "NOT NULL"
+    }
+    job_dispatch {
+        TEXT job_id PK,FK,UK "NOT NULL"
+        INTEGER dispatch_after_ms "NOT NULL"
+        INTEGER published_at_ms "nullable"
+        INTEGER publish_attempts "NOT NULL"
+    }
+    photos {
+        TEXT photo_id PK,UK "NOT NULL"
+        TEXT owner_id "NOT NULL"
+        TEXT client_photo_id "NOT NULL"
+        TEXT object_key UK "NOT NULL"
+        TEXT sha256 "NOT NULL"
+        TEXT mime_type "NOT NULL"
+        INTEGER byte_size "NOT NULL"
+        INTEGER width "NOT NULL"
+        INTEGER height "NOT NULL"
+        TEXT source "NOT NULL"
+        INTEGER captured_at_ms "nullable"
+        TEXT captured_at_source "nullable"
+        INTEGER uploaded_at_ms "NOT NULL"
+    }
+    photos ||..o{ comic_job_photos : "owner_id, photo_id / DELETE RESTRICT"
+    comic_jobs ||..o{ comic_job_photos : "owner_id, job_id / DELETE CASCADE"
+    comic_jobs ||..o| job_dispatch : "job_id / DELETE CASCADE"

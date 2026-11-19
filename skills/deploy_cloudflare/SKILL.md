@@ -8,6 +8,7 @@ description: 自动配置 LookMe-Worker 开发环境的 Cloudflare D1、私有 R
 Cloudflare TypeScript API Worker 处理上传、建单和查询；D1 存元数据、R2 存图片；海外 VPS 上的 Python Worker 通过 Queues HTTP pull 领任务。VPS 不直接管理 D1，也不新增入站端口。
 
 - 配置或更改 D1/R2 前，读 [资源、权限与数据设计](references/storage.md) 和 [初始 SQL 模板](references/schema.sql)。
+- 修改 `references/schema.sql` 后，执行 `python3 -I scripts/generate_schema.py`（从本 Skill 目录），同步生成 `references/schema.mmd` 和 `references/schema.html`；开发时可加 `--watch`。使用方法见 [Schema 可视化](references/schema-visualization.md)。可视化不代替版本化迁移。
 - 联调上传、建单和下载时，读 [图片上传与下载](references/image-upload.md)。
 
 ## 自动化范围与默认值
