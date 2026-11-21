@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LookMe 版本化图片分析配置",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "schema_version", "default_version", "profiles"],
+  "properties": {
+    "$schema": { "const": "./analysis-profiles.schema.json" },
+    "schema_version": { "const": 1 },
+    "default_version": {
+      "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+      "description": "只影响新上传任务；必须指向已锁定版本，不改变已有Outbox。"
+    },
+    "profiles": {
+      "type": "object", "minProperties": 1, "maxProperties": 100, "additionalProperties": false,
+      "patternProperties": {
+        "^[a-z0-9][a-z0-9._-]{0,63}$": {
+          "type": "object", "additionalProperties": false,
+          "required": ["adapter", "model", "prompt", "max_completion_tokens", "enable_thinking"],
+          "properties": {
+            "adapter": { "const": "workers-ai-chat", "description": "仅支持本适配器的多模态Chat Completions协议；不自动猜测其他模型接口。" },
+            "model": { "type": "string", "pattern": "^@cf/[a-z0-9._-]+/[A-Za-z0-9._-]+$" },
+            "prompt": { "type": "string", "minLength": 1, "maxLength": 16000 },
+            "max_completion_tokens": { "type": "integer", "minimum": 1, "maximum": 4096 },
+            "enable_thinking": { "type": "boolean" }
+          }
+        }
+      }
+    }
+  }
+}

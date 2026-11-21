@@ -1,0 +1,17 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "lookme-story-local",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-19",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [],
+  // 不绑定 AI：Wrangler 的 Workers AI binding 会访问远端，不能冒充本地模拟。
+  // npm test 注入隔离 mock；本地 dev 仅供鉴权/查询前置校验，不调用真实模型。
+  "vars": { "STORY_GENERATION_ENABLED": false },
+  "d1_databases": [{
+    "binding": "DB", "database_name": "lookme-dev",
+    "database_id": "00000000-0000-0000-0000-000000000000",
+    "migrations_dir": "../worker-upload/migrations"
+  }]
+}

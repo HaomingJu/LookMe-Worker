@@ -1,0 +1,28 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "lookme-story",
+  "account_id": "4bc883fc791d8706160792e5f7b78b64",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-19",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [],
+  // 独立 HTTP Worker：没有 Cron、Queue、R2，也不加入现有自动部署管道。
+  // 发布前按部署 Skill 确认域名；当前未设置任何公网入口。
+  "env": {
+    "dev": {
+      "name": "lookme-story-dev",
+      "workers_dev": false,
+      "preview_urls": false,
+      "routes": [],
+      "vars": { "STORY_GENERATION_ENABLED": false },
+      "ai": { "binding": "AI" },
+      "d1_databases": [{
+        "binding": "DB",
+        "database_name": "lookme-dev",
+        "database_id": "8ca73bf2-a8d9-4d17-a393-105a9f63622d",
+        "migrations_dir": "../worker-upload/migrations"
+      }]
+    }
+  }
+}

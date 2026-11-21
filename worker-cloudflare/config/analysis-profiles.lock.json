@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "v2": "90645db18c31a2f4c2c33aa5df7ecb2cea3c96bbd1c14262132f1b6d9406aa79"
+  },
+  "retired_versions": [
+    "v1"
+  ]
+}
