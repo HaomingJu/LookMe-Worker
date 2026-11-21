@@ -1,0 +1,36 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "lookme-image2txt-local",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-19",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [],
+  // 本地占位 ID；不用于远端。mock 测试使用独立临时 D1/R2。
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "lookme-dev",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "../worker-upload/migrations"
+    }
+  ],
+  // Workers AI 不在本地推理；真实调用需授权，npm test 使用完全隔离的 mock。
+  "ai": { "binding": "AI" },
+  "r2_buckets": [
+    { "binding": "PHOTOS", "bucket_name": "lookme-dev-photos" }
+  ],
+  "queues": {
+    "consumers": [
+      {
+        "queue": "lookme-local-image2txt",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_concurrency": 2,
+        "max_retries": 8,
+        "retry_delay": 60,
+        "dead_letter_queue": "lookme-local-image2txt-dlq"
+      }
+    ]
+  }
+}

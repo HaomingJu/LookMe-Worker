@@ -30,6 +30,23 @@ erDiagram
         INTEGER published_at_ms "nullable"
         INTEGER publish_attempts "NOT NULL"
     }
+    photo_analyses {
+        TEXT photo_id PK,FK "NOT NULL"
+        TEXT analysis_version PK "NOT NULL"
+        TEXT model "NOT NULL"
+        TEXT status "NOT NULL"
+        INTEGER attempt_count "NOT NULL"
+        INTEGER next_attempt_at_ms "NOT NULL"
+        TEXT lease_token "nullable"
+        INTEGER lease_until_ms "nullable"
+        TEXT provider_attempt_id "nullable"
+        INTEGER provider_submitted_at_ms "nullable"
+        TEXT provider_request_id "nullable"
+        TEXT result_text "nullable"
+        TEXT error_code "nullable"
+        INTEGER created_at_ms "NOT NULL"
+        INTEGER updated_at_ms "NOT NULL"
+    }
     photos {
         TEXT photo_id PK,UK "NOT NULL"
         TEXT owner_id "NOT NULL"
@@ -61,4 +78,5 @@ erDiagram
     photos ||..o{ comic_job_photos : "owner_id, photo_id / DELETE RESTRICT"
     comic_jobs ||..o{ comic_job_photos : "owner_id, job_id / DELETE CASCADE"
     comic_jobs ||..o| job_dispatch : "job_id / DELETE CASCADE"
+    photos ||..o{ photo_analyses : "photo_id / DELETE RESTRICT"
     users ||..o{ user_tokens : "user_id / DELETE RESTRICT"

@@ -1,0 +1,49 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "lookme-image2txt",
+  "account_id": "4bc883fc791d8706160792e5f7b78b64",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-19",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [],
+  // 仅 dev 使用远端资源；资源变更、部署及真实模型调用需要明确授权。
+  "env": {
+    "dev": {
+      "name": "lookme-image2txt-dev",
+      "workers_dev": false,
+      "preview_urls": false,
+      "routes": [],
+      "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1,
+        "logs": { "enabled": true, "invocation_logs": true }
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "lookme-dev",
+          "database_id": "8ca73bf2-a8d9-4d17-a393-105a9f63622d",
+          "migrations_dir": "../worker-upload/migrations"
+        }
+      ],
+      "ai": { "binding": "AI" },
+      "r2_buckets": [
+        { "binding": "PHOTOS", "bucket_name": "lookme-dev-photos" }
+      ],
+      "queues": {
+        "consumers": [
+          {
+            "queue": "lookme-dev-image2txt",
+            "max_batch_size": 1,
+            "max_batch_timeout": 1,
+            "max_concurrency": 2,
+            "max_retries": 8,
+            "retry_delay": 60,
+            "dead_letter_queue": "lookme-dev-image2txt-dlq"
+          }
+        ]
+      }
+    }
+  }
+}

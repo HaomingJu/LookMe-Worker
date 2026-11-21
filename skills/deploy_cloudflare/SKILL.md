@@ -5,7 +5,7 @@ description: 自动配置 LookMe-Worker 开发环境的 Cloudflare D1、私有 R
 
 # LookMe Cloudflare 部署
 
-Cloudflare TypeScript API Worker 处理上传、建单和查询；D1 存元数据、R2 存图片；海外 VPS 上的 Python Worker 通过 Queues HTTP pull 领任务。VPS 不直接管理 D1，也不新增入站端口。
+当前 Cloudflare TypeScript 上传 Worker 保存图片，独立 image2txt Queue Worker 通过 Workers AI binding 调用 Gemma 并保存文字；D1 存元数据/分析结果，R2 存私有图片。建单、漫画生成、查询及 VPS HTTP pull 是后续规划，不据此自动开通资源。image2txt 部署见 `../deploy_worker/references/image2txt.md`。
 
 - 配置或更改 D1/R2 前，读 [资源、权限与数据设计](references/storage.md) 和 [初始 SQL 模板](references/schema.sql)。
 - 修改 `references/schema.sql` 后，执行 `python3 -I scripts/generate_schema.py`（从本 Skill 目录），同步生成 `references/schema.mmd` 和 `references/schema.html`；开发时可加 `--watch`。使用方法见 [Schema 可视化](references/schema-visualization.md)。可视化不代替版本化迁移。
@@ -27,7 +27,7 @@ Cloudflare TypeScript API Worker 处理上传、建单和查询；D1 存元数�
 
 ## 跨账号与跨机器复现
 
-- 本 Skill 是 LookMe 的可复现部署流程，不绑定某个个人账号或机器。使用 Skill 所在目录定位 `references/`，向上定位仓库，再使用相对项目路径 `worker-cloudflare/`；不得硬编码用户主目录、邮箱、Account ID 或历史数据库 ID。
+- 本 Skill 是 LookMe 的可复现部署流程，不绑定某个个人账号或机器。使用 Skill 所在目录定位 `references/`，向上定位仓库，再使用相对项目路径 `worker-cloudflare/worker-upload/` 或 `worker-cloudflare/worker-image2txt/`；不得硬编码用户主目录、邮箱、Account ID 或历史数据库 ID。
 - 正常前提为 Node.js/npm 可用、Cloudflare 账号已开通 D1/R2 且有足够配额。首次配置或换账号时，用户只需在网页登录目标账号并授权；需要开通计费、安装系统运行环境或解决账号冲突时，明确说明额外前提，不承诺无条件零交互。
 - 已有 Wrangler 配置中的 Account ID 只是当前绑定记录，不是不可更改的部署目标。用户明确要求换账号时，以新登录目标为准，重新查重并取得新账号的真实数据库 ID；保持逻辑 binding 和默认资源名称一致，只替换目标资源引用。
 - 同一配置在同一账号重跑应复用已确认资源和已应用迁移，不重复创建、不重复建表。已由本项目配置且 schema 一致的开发资源可复用；仅名称相同、无项目归属依据的资源不得自动接管。
@@ -86,5 +86,5 @@ Cloudflare TypeScript API Worker 处理上传、建单和查询；D1 存元数�
 ## 不变规则
 
 - 部署与运行身份分离；客户端无 Cloudflare/S3/OpenAI 管理密钥；秘密只进 Secret 或 VPS 凭据存储，不进 Git、日志和聊天。
-- 图片对象写入成功后才可标记上传或任务完成；Queue 仅放 `job_id`，不传照片或秘密。R2 和 D1 不承诺跨服务事务，按参考文档处理故障恢复。
+- 图片对象写入成功后才可标记上传或任务完成；漫画 Queue 仅放 `job_id`；image2txt Queue 仅放 `photo_id` 和 `analysis_version`，均不传照片、对象键或秘密。R2 和 D1 不承诺跨服务事务，按参考文档处理故障恢复。
 - 不改现有线上 Worker、网络、防火墙，不自动升级套餐，不自动执行清桶或破坏性迁移。自动化不绕过权限拒绝和必要的安全确认。

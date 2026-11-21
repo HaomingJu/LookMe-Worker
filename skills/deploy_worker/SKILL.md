@@ -1,11 +1,19 @@
 ---
 name: deploy-lookme-worker
-description: 构建、测试并部署 LookMe 图片上传 Worker 到已配置的 Cloudflare 开发环境；自动执行 CLI，浏览器完成 OAuth，独立用户 Token 安全签发，自动完成部署、合成图上传及 D1/R2 验收，支持中断恢复。不默认部署生产或覆盖其他 Worker。
+description: 构建、测试并部署 LookMe 上传或图片转文字 Queue Worker；核对资源、Secret 和迁移，完成已授权的合成图验收、CPU/失败日志诊断及中断恢复。不默认部署生产、调用付费模型或升级套餐。
 ---
 
-# LookMe 上传 Worker 部署
+# LookMe Worker 部署
 
-本 Skill 负责 `worker-cloudflare/` 中代码的部署，不代替资源开通 Skill。以自身路径向上定位仓库，使用相对项目路径；不固定个人账号、机器目录或历史数据库 ID。
+本 Skill 负责 `worker-cloudflare/worker-upload/` 中代码的部署，不代替资源开通 Skill。以自身路径向上定位仓库，使用相对项目路径；不固定个人账号、机器目录或历史数据库 ID。
+
+## 先选择部署目标
+
+- **图片转文字 / image2txt / Gemma / Workers AI / Queue 消费者**：执行 [图片转文字部署与复现](references/image2txt.md)，应用目录为 `worker-cloudflare/worker-image2txt/`。当前通过 AI binding 调用 Gemma v2，无外部模型 Secret；只导出 queue()，没有 HTTP 域名选择；不要执行下方上传 Worker 的域名、Token 或 HTTP smoke test 步骤。真实模型调用和套餐升级分别受授权约束，Free CPU 诊断见该参考。
+- **图片上传 / photos API**：执行下方上传流程，应用目录为 `worker-cloudflare/worker-upload/`。
+- 同时部署两者时分别核对目标和验收，复用同一版本化迁移目录，不覆盖对方的 Worker 或路由。用户只要求一个时不要部署另一个。
+
+以下章节专用于**上传 Worker**；不能套用到 Queue-only 消费者。
 
 ## 范围与授权
 
@@ -19,7 +27,7 @@ description: 构建、测试并部署 LookMe 图片上传 Worker 到已配置的
 - 开始时展示目标账号、`dev` 环境、Worker 名和公网入口影响。完整部署验收会创建最多两个测试用户及凭据，并在开发 D1/R2 留下两张合成 JPEG；不接触真实照片或模型。用户明确请求完整部署验收可连续执行；只请求部署而未授权创建测试身份时，先完成部署和无凭据检查，再一次性确认用户/测试数据范围，不反复逐步骤询问。
 - 用户只请求部署时，不把“尚无用户”当成上线阻塞；不能完成带凭据上传检查时，明确交接“已部署、上传未验证”。
 - 先检测再变更；记录非秘密检查点，网络错误或 JSON 解析错误不等于远端没有写入。重跑复用已确认的项目资源和测试身份，不自动新建一批用户或轮换凭据。
-- 本文命令均从 `worker-cloudflare/` 执行。检查锁文件、脚本和本版本 Wrangler help；命令所列默认名称以配置实际值为准。域名选择尚未明确时必须询问；此外，多账号歧义、账号不匹配、资源用途不明、生产目标、收费开通或危险迁移才暂停。
+- 本文命令均从 `worker-cloudflare/worker-upload/` 执行。检查锁文件、脚本和本版本 Wrangler help；命令所列默认名称以配置实际值为准。域名选择尚未明确时必须询问；此外，多账号歧义、账号不匹配、资源用途不明、生产目标、收费开通或危险迁移才暂停。
 
 ## 0. 部署前询问 API 域名
 
@@ -35,7 +43,7 @@ description: 构建、测试并部署 LookMe 图片上传 Worker 到已配置的
 
 ## 1. 本地验收
 
-从 `worker-cloudflare/` 执行：
+从 `worker-cloudflare/worker-upload/` 执行：
 
 ```bash
 npm ci

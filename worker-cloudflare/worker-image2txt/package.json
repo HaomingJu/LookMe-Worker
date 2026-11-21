@@ -1,0 +1,18 @@
+{
+  "name": "lookme-worker-image2txt",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc",
+    "test": "vitest run",
+    "build": "wrangler deploy --env dev --dry-run"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261119.1",
+    "esbuild": "0.28.2",
+    "miniflare": "5.20261118.0-beta",
+    "typescript": "7.0.2",
+    "vitest": "4.1.12",
+    "wrangler": "4.165.0"
+  }
+}

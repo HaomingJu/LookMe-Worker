@@ -2,6 +2,10 @@
 
 `POST /photos` 将 JPEG 字节写入私有 R2 `PHOTOS`，元数据写入 D1 `DB`。每个用户使用独立随机 Bearer Token；D1 仅保存 SHA-256 哈希，不保存明文。任务生成、下载、CORS、速率限制和孤儿对象清理尚未实现。
 
+## 独立图片转文字消费者
+
+`../worker-image2txt/` 是仅 Queue 触发的独立 Worker，与上传共用 D1/R2 和本目录的版本化迁移。新增 `0003_photo_analyses.sql` 不改变上传 API 或原始照片元数据；当前上传成功不会自动投递分析消息。消费者的状态机、本地 mock 测试及未授权远端操作边界见 [图片转文字 README](../worker-image2txt/README.md)。
+
 ## 本地运行
 
 需要与锁定 Wrangler 兼容的 Node.js/npm。
