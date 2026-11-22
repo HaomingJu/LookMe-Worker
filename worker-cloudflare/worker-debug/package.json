@@ -1,0 +1,21 @@
+{
+  "name": "lookme-worker-debug",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev --local --config wrangler.local.jsonc",
+    "test": "npm run test:backend && playwright test",
+    "test:backend": "node --test test/backend.test.mjs",
+    "typecheck": "tsc",
+    "build": "wrangler deploy --env dev --dry-run",
+    "deploy:dev": "wrangler deploy --env dev"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261119.1",
+    "@playwright/test": "1.56.1",
+    "esbuild": "0.28.2",
+    "miniflare": "5.20261118.0-beta",
+    "typescript": "7.0.2",
+    "wrangler": "4.165.0"
+  }
+}

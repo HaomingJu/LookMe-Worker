@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="light">
+  <title>LookMe 调试</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <section id="login-screen" class="login-screen">
+    <form id="login-form" class="login-card">
+      <h1>LookMe 调试</h1>
+      <label for="password">访问口令</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="256">
+      <button id="login-button" class="primary" type="submit">登录</button>
+      <p id="login-error" class="error" role="alert"></p>
+    </form>
+  </section>
+  <div id="workspace" class="shell" hidden>
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-header">
+        <h2 class="brand">LookMe <span>调试</span></h2>
+        <button id="toggle-sidebar" class="square" type="button" aria-label="收起侧栏" aria-controls="sidebar" aria-expanded="true">‹</button>
+      </div>
+      <div class="nav-heading"><span>用户</span><span id="user-count"></span></div>
+      <nav id="user-list" class="user-list" aria-label="用户与视图"></nav>
+    </aside>
+    <main class="main-content">
+      <form id="filters" class="filter-bar" aria-label="按拍摄时间筛选">
+        <div class="field date-field">
+          <label for="date">拍摄日期</label>
+          <div class="date-controls">
+            <button id="previous-day" type="button" class="square" aria-label="前一天">‹</button>
+            <input id="date" type="date" min="0001-01-01" max="9998-12-31" required>
+            <button id="next-day" type="button" class="square" aria-label="后一天">›</button>
+          </div>
+        </div>
+        <div class="field photo-filter"><label for="start-time">开始时间</label><input id="start-time" type="time" value="00:00" required></div>
+        <span class="range-separator photo-filter" aria-hidden="true">—</span>
+        <div class="field photo-filter"><label for="end-time">结束时间</label><input id="end-time" type="time" value="23:59" required></div>
+        <button id="full-day" type="button" class="quiet photo-filter">全天</button>
+        <button id="apply" type="submit" class="primary">筛选</button>
+        <button id="refresh" class="secondary" type="button">刷新</button>
+        <span id="zone-note" class="zone-note muted">UTC+8 · 含结束分钟</span>
+      </form>
+      <p id="notice" class="notice" role="status" aria-live="polite"></p>
+      <section id="photos-panel" class="photo-panel" aria-labelledby="photos-title">
+        <div class="section-heading"><h2 id="photos-title">照片</h2><span id="photo-count" class="muted" aria-live="polite"></span></div>
+        <p id="empty" class="empty-state muted" hidden>无照片</p>
+        <div id="photo-grid" class="photo-grid" aria-label="照片列表"></div>
+        <div id="pager" class="pager" aria-label="照片分页" hidden>
+          <button id="previous-page" class="secondary" type="button">上一页</button>
+          <span id="page-label" class="muted" aria-live="polite">第 1 页</span>
+          <button id="next-page" class="secondary" type="button">下一页</button>
+        </div>
+        <button id="retry-page" class="secondary" type="button" hidden>重试加载</button>
+      </section>
+      <section id="stories-panel" class="story-panel" aria-labelledby="stories-title" hidden>
+        <div class="section-heading"><h2 id="stories-title">故事</h2></div>
+        <p id="story-status" class="empty-state muted" role="status"></p>
+      </section>
+    </main>
+  </div>
+  <dialog id="lightbox">
+    <button id="close-lightbox" class="square" aria-label="关闭大图" type="button">×</button>
+    <img id="large-photo" alt="当前照片大图">
+    <p id="large-caption"></p>
+  </dialog>
+  <dialog id="info-dialog" class="info-dialog" aria-labelledby="info-title">
+    <button id="close-info" class="square" aria-label="关闭详情" type="button">×</button>
+    <h2 id="info-title">照片详情</h2>
+    <p id="info-summary" class="full-summary"></p>
+    <dl id="info-metadata" class="info-metadata"></dl>
+  </dialog>
+</body>
+</html>

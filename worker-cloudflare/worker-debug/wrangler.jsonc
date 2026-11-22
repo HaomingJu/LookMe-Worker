@@ -1,0 +1,33 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "lookme-debug",
+  "account_id": "4bc883fc791d8706160792e5f7b78b64",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-19",
+  "rules": [
+    { "type": "Text", "globs": ["**/*.html", "**/*.css", "**/public/*.js"], "fallthrough": true }
+  ],
+  // 远端资源仅在 --env dev 时绑定；该 Worker 只读，不写 D1、不改 R2。
+  "env": {
+    "dev": {
+      "name": "lookme-debug-dev",
+      "routes": [
+        {
+          "pattern": "lookme.fudaixuexue.eu.cc",
+          "custom_domain": true,
+          "zone_id": "ad14ac2a1d1f349624f8008f963945dc"
+        }
+      ],
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "lookme-dev",
+          "database_id": "8ca73bf2-a8d9-4d17-a393-105a9f63622d"
+        }
+      ],
+      "r2_buckets": [
+        { "binding": "PHOTOS", "bucket_name": "lookme-dev-photos" }
+      ]
+    }
+  }
+}

@@ -4,3 +4,7 @@
 **/*.HEIC
 **/*.jpeg
 **/*.jpg
+/worker-cloudflare/worker-debug/node_modules/
+/worker-cloudflare/worker-debug/.wrangler/
+/worker-cloudflare/worker-debug/.dev.vars*
+/worker-cloudflare/worker-debug/.env*
