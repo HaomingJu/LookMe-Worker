@@ -8,3 +8,6 @@
 /worker-cloudflare/worker-debug/.wrangler/
 /worker-cloudflare/worker-debug/.dev.vars*
 /worker-cloudflare/worker-debug/.env*
+
+# Wrangler 本机缓存与运行状态（包含账号缓存，不属于项目源码）。
+.wrangler/
