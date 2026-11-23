@@ -2,11 +2,11 @@
 
 独立入口 `src/index.ts` 只导出 `queue()`，无 `fetch()`；所有 Wrangler 环境关闭 workers.dev、预览 URL 和 HTTP 路由。共用上传 Worker 的 D1 `DB` 和私有 R2 `PHOTOS`，通过原生 Workers AI binding `AI` 调用 **`@cf/google/gemma-4-26b-a4b-it`**。
 
-已于 **2026-11-21** 将 Gemma v2 发布至 `lookme-image2txt-dev`，当前版本 `65c52d73-67bf-4f01-9f9d-6f2fa00b077b`，已核对新版本100%活动且绑定 AI/DB/PHOTOS。**真实合成图已完成 Queue → Gemma → D1 → ack 验收**。不再调用 Moondream，也不需要 `MOONDREAM_API_KEY`；不能把旧部署或 mock 成功当作真实 Gemma 验收。
+2026-11-21的dev验收记录显示已启用完整自动管道；当次消费者版本为 `21c1d21a-3be8-40dc-ace9-a2c7b5f57b64`，上传生产者版本为 `5e15d8a8-f03e-4326-b9c4-c0a22155a91a`。新上传自动入队、Cron补投及一次真实合成图已验证；另按明确授权补跑14张既有图片，均成功。固定入口与本次验收见 [PIPELINE.md](../PIPELINE.md)。不再依赖Moondream Key。
 
-## 本次真实验收（2026-11-21）
+## 首次Gemma真实验收（2026-11-21，历史记录）
 
-- dev Worker：`lookme-image2txt-dev`；实际活动版本：`65c52d73-67bf-4f01-9f9d-6f2fa00b077b`。
+- dev Worker：`lookme-image2txt-dev`；当次活动版本：`65c52d73-67bf-4f01-9f9d-6f2fa00b077b`。
 - 合成图：256×160 JPEG、5,129字节，白底红色方块和蓝色圆形；未使用真实私有照片。
 - `photo_id: b4cc3189-c26c-49f7-aa3f-4652e6111f36`、`analysis_version: v2`；D1 状态 `succeeded`、领取次数1，日志 `message_ack / analysis_succeeded`。
 - 平台实际 invocation 指标：**CPU 13 ms，wall time 1,540 ms，outcome ok**；应用模型阶段 wall time 1,098 ms。不是 Startup Time，也不是本地 mock 数据。
@@ -37,12 +37,12 @@
 4. 原子领取并在调用前持久化提交标记，经 `env.AI.run()` 分析图片。
 5. 只有完整文字成功写入 `photo_analyses` 后才确认消息。
 
-生产者属于可信服务端边界，不是用户授权 API。上传 Worker 目前不会自动投递分析消息，本次不新增公开查询/下载接口或漫画生成 API。
+生产者属于可信服务端边界，不是用户授权 API。上传 Worker 通过同事务Outbox自动投递新上传，Cron补投只处理已有任务；旧照片不自动补建。完整配置和部署见 [自动分析管道](../PIPELINE.md)。不新增公开查询/下载接口或漫画生成API。
 
 ### 版本隔离
 
-- `v1` 固定为历史 Moondream 语义，**不改为 Gemma 的别名**。现有 v1 数据保留；本消费者拒绝旧 v1 消息并让其进入 DLQ，不重新调用 Moondream。
-- `v2` 固定使用 Gemma 模型、简体中文事实描述 prompt、`max_completion_tokens: 512`、`chat_template_kwargs.enable_thinking: false`、`stream: false`。
+- `v1` 固定为历史 Moondream 语义，**不改为 Gemma 的别名**。现有 v1 数据保留；v1记录为退役版本，本消费者拒绝旧v1消息并让其进入DLQ，不重新调用 Moondream。
+- 当前默认`v2`固定使用Gemma模型、简体中文事实描述、512 completion tokens、关闭thinking、非streaming。模型/prompt/参数来自共享的 `../config/analysis-profiles.json`，运行时及部署前都校验版本锁。新增版本可配置，旧版本不能重写。
 - 唯一键仍为 `(photo_id, analysis_version)`。已有同版本记录的 model 不匹配时不领取、不覆盖、不调用，输出 `analysis_model_mismatch`。
 - 后续改变模型/提示词/生成参数，需新增分析版本，不能静默覆盖历史结果。当前结构已支持新版本，不需要为 v2 另加数据库迁移。
 
@@ -120,4 +120,8 @@ Vitest 使用临时真实 D1/R2、mock `AI.run`，以及真实本地 Queue/DLQ�
 
 `wrangler.local.jsonc` 的 AI 声明不是本地 GPU 模型。**不要把 wrangler dev 当作离线 mock**：AI binding 的真实推理可能访问远端并消耗额度，必须另行授权；离线验证用 npm test。本地 Wrangler 状态也不会自动与上传目录共享。
 
-部署步骤与授权边界见 [部署 SKILL](../../skills/deploy_worker/references/image2txt.md)。重跑复用资源和同一测试 photo/version；不清除调用标记、不为了测试重复计费、不删除历史 Secret 或资源。
+部署步骤与授权边界见 [部署 SKILL](../../../skills/deploy_worker/references/image2txt.md)。重跑复用资源和同一测试 photo/version；不清除调用标记、不为了测试重复计费、不删除历史 Secret 或资源。
+
+## 固定配置入口
+
+不要通过控制台或管理API修改Cloudflare配置；修改Wrangler文件和版本化AI配置后，使用 `npm run config:check`、`npm run pipeline:plan`、`npm run pipeline:deploy:dev -- --confirm-dev`。脚本固定先迁移、发布消费者、再发布上传生产者和Cron。完整步骤、暂停语义和历史任务边界见 [PIPELINE.md](../PIPELINE.md)。

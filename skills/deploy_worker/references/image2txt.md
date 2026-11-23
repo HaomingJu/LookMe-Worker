@@ -2,13 +2,17 @@
 
 应用目录：`worker-cloudflare/worker-image2txt/`。从 Skill 路径定位仓库；名称、账号、资源 ID 读取当前 Wrangler 配置，使用 package-lock 锁定工具，不复制历史账号或秘密。
 
+上传自动分析的完整固定入口见 `../../../worker-cloudflare/PIPELINE.md` 和 `worker-cloudflare/scripts/pipeline.mjs`。全部Cloudflare配置修改必须经Wrangler文件和命令；现有profile不得改写，使用 `profiles:lock` 追加版本。
+
+AI模型/prompt/生成参数由 `worker-cloudflare/config/analysis-profiles.json` 和版本锁管理；新增版本运行profiles:lock。已有库的0004迁移启用上传Outbox及Cron补投，完整管道不要绕过固定pipeline入口。
+
 当前使用 **Workers AI `@cf/google/gemma-4-26b-a4b-it`，analysis_version = v2**。历史 v1 是 Moondream；本消费者不再调用它，不需要 Moondream API Key。不能把旧 v1 消息直接重解释为 Gemma。
 
 ## 0. 授权与边界
 
 - 用户明确要求完整 dev 部署和真实产出文字时，完成本地验证、缺失资源准备、已授权迁移、部署及一次合成小图验收；只要求写代码/文档时不进行远端变更或推理。
 - 只导出 queue()，保持 workers_dev、preview_urls 关闭及 routes 为空。没有域名选择，不新增临时 fetch() 调试入口。
-- 不发布上传 Worker，不自动接入上传后生产者，不修改真实用户或照片。保持 R2 私有，不为省 Base64 公开桶。
+- 仅要求消费者部署时不发布上传Worker；明确要求自动分析管道时使用固定pipeline脚本同时部署生产者/Cron，不手工拼流程。不修改真实用户或照片。保持 R2 私有，不为省 Base64 公开桶。
 - 真实推理可能消耗 Workers AI 免费额度或产生账号已启用的费用。默认只调用一次授权合成图，不压测、不自动开通收费功能或升级套餐；若账号要求付费才能继续，暂停说明。
 - 保留用户的工作区改动。先读 CLAUDE、应用 README、`skills/deploy_cloudflare/SKILL.md`、配置和迁移。版本化迁移唯一来源 `../worker-upload/migrations/`。
 

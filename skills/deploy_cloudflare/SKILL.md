@@ -11,6 +11,12 @@ description: 自动配置 LookMe-Worker 开发环境的 Cloudflare D1、私有 R
 - 修改 `references/schema.sql` 后，执行 `python3 -I scripts/generate_schema.py`（从本 Skill 目录），同步生成 `references/schema.mmd` 和 `references/schema.html`；开发时可加 `--watch`。使用方法见 [Schema 可视化](references/schema-visualization.md)。可视化不代替版本化迁移。
 - 联调上传、建单和下载时，读 [图片上传与下载](references/image-upload.md)。
 
+## 配置修改与可复现入口
+
+所有Cloudflare配置修改必须保存在Wrangler配置文件并通过Wrangler应用；不直接通过控制台或管理API改绑定/路由/队列触发器/Cron/参数/日志。无法由Wrangler完成的步骤先提醒用户。D1 schema仍使用版本化SQL及Wrangler migrations；首次创建资源不能伪称只靠现有JSONC完成，按资源授权单独处理。
+
+自动分析管道的确定流程见 `../../worker-cloudflare/PIPELINE.md`；执行仓库 `worker-cloudflare/scripts/pipeline.mjs check|plan|deploy-dev --confirm-dev`，而不是每次重新让AI设计步骤。新Outbox迁移不回填历史照片；默认分析版本和生成参数由共享JSON/profile锁决定。
+
 ## 自动化范围与默认值
 
 用户请求实际配置开发环境 D1/R2 时，连续执行本地准备、浏览器登录、资源查重、创建缺失资源、写入绑定、安全初始迁移和验证，不为每个步骤重复索要确认，也不把 CLI 命令交给用户执行。开始时说明范围与默认值；用户只需在浏览器登录并批准权限。仅修改或审阅本 Skill/文档的请求不授权任何远端操作。

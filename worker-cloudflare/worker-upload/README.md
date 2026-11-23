@@ -4,7 +4,7 @@
 
 ## 独立图片转文字消费者
 
-`../worker-image2txt/` 是仅 Queue 触发的独立 Worker，与上传共用 D1/R2 和本目录的版本化迁移。新增 `0003_photo_analyses.sql` 不改变上传 API 或原始照片元数据；当前上传成功不会自动投递分析消息。消费者的状态机、本地 mock 测试及未授权远端操作边界见 [图片转文字 README](../worker-image2txt/README.md)。
+`../worker-image2txt/` 是仅 Queue 触发的独立 Worker，与上传共用 D1/R2 和本目录的版本化迁移。新增 `0003_photo_analyses.sql` 不改变上传 API 或原始照片元数据；自动分析通过同事务Outbox和Wrangler配置的Queue生产者接入，Cron补投仅处理已有Outbox，不回填历史照片。完整配置入口见 [自动分析管道](../PIPELINE.md)。消费者的状态机、本地 mock 测试及远端操作边界见 [图片转文字 README](../worker-image2txt/README.md)。
 
 ## 本地运行
 
@@ -94,7 +94,7 @@ with urlopen(request) as response:
 
 ## 部署与历史数据
 
-完整流程见 [部署 Skill](../skills/deploy_worker/SKILL.md)。应用新版代码前必须迁移 `0002_user_tokens.sql`。该迁移保留照片/任务的已有 owner，补建对应用户，但不会自动给他们签发 Token，也不重建业务表。现有 photos/comic_jobs 的 owner 字段暂未增加 users 外键，避免破坏性重建；新上传只接受认证得到的已有用户。
+完整流程见 [部署 Skill](../../../skills/deploy_worker/SKILL.md)。应用新版代码前必须迁移 `0002_user_tokens.sql`。该迁移保留照片/任务的已有 owner，补建对应用户，但不会自动给他们签发 Token，也不重建业务表。现有 photos/comic_jobs 的 owner 字段暂未增加 users 外键，避免破坏性重建；新上传只接受认证得到的已有用户。
 
 用户授权远端操作后：
 
@@ -117,3 +117,15 @@ npm run deploy:dev
 `upload_batch_cpp` 首次只需 Token 文件及 JPEG 列表，自动创建受限状态并输出 STATE_FILE；失败后使用 `--state` 指定原文件恢复，跳过成功照片并保留 UUID。用法、CMake 构建和状态限制见 [BATCH.md](test/clients/BATCH.md)。C、C++、JavaScript、Python和curl均有独立批量实现；统一最多8并发和原UUID恢复，Worker仍为每请求一张照片。所有原生批量协议测试执行 `npm run test:batch:all`。
 
 开发环境已配置 `api.fudaixuexue.eu.cc` 自定义域；单张客户端仍可覆盖 Base URL，批量客户端默认使用该域。更换账号/域名时以当前 Wrangler 配置及部署返回值为准。部署 Skill 会先确认是否使用自定义域，不自动覆盖主站或删除已有域名。
+
+## 自动分析配置
+
+配置、版本锁、定时补投及固定部署入口见 [PIPELINE.md](../PIPELINE.md)。新增0004迁移后，PHOTO_ANALYSIS_ENABLED=true的新上传会在同一D1事务写入照片和Outbox；Queue暂时失败不改变已经成功的上传响应。旧照片重传不会创建新分析任务。
+
+```bash
+npm run config:check
+npm run pipeline:plan
+npm run pipeline:deploy:dev -- --confirm-dev
+```
+
+所有Cloudflare配置修改均在Wrangler文件中完成。上述发布脚本不会补投历史照片或额外执行真实AI测试。

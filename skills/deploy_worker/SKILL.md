@@ -7,6 +7,25 @@ description: 构建、测试并部署 LookMe 上传或图片转文字 Queue Work
 
 本 Skill 负责 `worker-cloudflare/worker-upload/` 中代码的部署，不代替资源开通 Skill。以自身路径向上定位仓库，使用相对项目路径；不固定个人账号、机器目录或历史数据库 ID。
 
+## 自动分析管道：固定配置入口
+
+用户要求上传自动分析、Outbox或Cron补投时，先读 `../../worker-cloudflare/PIPELINE.md`，不要重新设计一套临时部署步骤。Cloudflare配置修改只能写入Wrangler文件并由Wrangler执行；若无法通过Wrangler完成，先提醒用户。D1表结构用版本化SQL迁移，不能塞进Wrangler JSONC。
+
+从仓库根目录执行固定入口：
+
+```bash
+node worker-cloudflare/scripts/pipeline.mjs check
+node worker-cloudflare/scripts/pipeline.mjs plan
+# 展示并确认目标账号、现有上传域名、迁移和自动推理影响后执行：
+node worker-cloudflare/scripts/pipeline.mjs deploy-dev --confirm-dev
+```
+
+脚本使用锁定Wrangler解析JSONC并运行本地检查，固定先迁移、部署消费者、再部署上传生产者/Cron。源码/profile和Wrangler文件是配置依据，不能临时用管理API写绑定、触发器、Cron或日志。资源不存在/权限不足时停止，不把认证错误当成创建依据。保留原有API域名，不因为这次加队列而换域名或开放分析Worker HTTP。
+
+`0004_photo_analysis_dispatch.sql`只新增Outbox，不回填历史照片。PHOTO_ANALYSIS_ENABLED=true只使后续新上传自动建任务；老照片重传不补建任务。共享AI配置位于 `worker-cloudflare/config/analysis-profiles.json`；`profiles:lock`只锁新增版本，不允许改写旧版本。默认版本切换不改变已有Outbox。
+
+部署脚本不额外上传测试图或主动发AI请求。真实验收另在已授权合成图/测试用户范围内走正常上传API，验证Outbox与分析状态；不能用手工Queue消息冒充上传自动触发，不能默认补投用户既有批次。出现配置脚本不能覆盖的步骤先告知，不依靠每次AI临场推断。
+
 ## 先选择部署目标
 
 - **图片转文字 / image2txt / Gemma / Workers AI / Queue 消费者**：执行 [图片转文字部署与复现](references/image2txt.md)，应用目录为 `worker-cloudflare/worker-image2txt/`。当前通过 AI binding 调用 Gemma v2，无外部模型 Secret；只导出 queue()，没有 HTTP 域名选择；不要执行下方上传 Worker 的域名、Token 或 HTTP smoke test 步骤。真实模型调用和套餐升级分别受授权约束，Free CPU 诊断见该参考。
