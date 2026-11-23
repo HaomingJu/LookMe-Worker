@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { run } from '../scripts/story.mjs';
-it('真实本地HTTP：手动脚本 → workerd → D1摘要 → mock AI → 0600故事文件', async () => {
+it.each(['v2', 'v3', 'v4', 'v5', 'v5-gemma'])('真实本地HTTP %s：手动脚本 → workerd → D1摘要 → mock AI → 0600故事文件', async version => {
   const bundle = await build({ entryPoints: ['test/runtime-fixture.ts'], bundle: true, write: false, format: 'esm', platform: 'browser' });
   const runtime = new Miniflare(convertV4MiniflareOptions({ modules: true, script: bundle.outputFiles[0].text, compatibilityDate: '2026-11-19',
     d1Databases: ['DB'], outboundService: () => { throw new Error('测试禁止访问公网'); } }));
@@ -31,10 +31,13 @@ it('真实本地HTTP：手动脚本 → workerd → D1摘要 → mock AI → 060
     }
     const tokenFile = path.join(folder, 'user.token'), out = path.join(folder, 'result.story.json');
     await fs.writeFile(tokenFile, token + '\n', { mode: 0o600 });
-    const result = await run(['--base-url', (await runtime.ready).origin, '--token-file', tokenFile, '--date', '2026-11-21', '--stories', '2', '--confirm-model-call', '--out', out]);
-    expect(result.story_count).toBe(2);
+    const model = version === 'v5-gemma' ? '@cf/google/gemma-4-26b-a4b-it' : '@cf/qwen/qwen3.8-27b';
+    const count = version.startsWith('v5') ? 2 : 3;
+    const result = await run(['--base-url', (await runtime.ready).origin, '--token-file', tokenFile, '--date', '2026-11-21', '--model', model, '--story-version', version, '--confirm-model-call', '--out', out]);
+    expect(result.story_count).toBe(count);
     const saved = JSON.parse(await fs.readFile(out, 'utf8'));
-    expect(saved.model).toBe('@cf/qwen/qwen3.8-27b'); expect(saved.stories).toHaveLength(2);
+    expect(saved.story_version).toBe(version); expect(saved.model).toBe(model); expect(saved.stories).toHaveLength(count);
+    if (version.startsWith('v5')) expect(saved.story_count_mode).toBe('auto');
     expect(saved.stories.flatMap((s: any) => s.source_photo_ids)).toEqual(ids);
     expect(saved.stories.every((s: any) => s.panels.length === 4 && s.image_prompt)).toBe(true);
     expect(saved.day_complete).toBe(true);

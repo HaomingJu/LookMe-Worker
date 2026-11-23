@@ -12,9 +12,10 @@
     "profiles:lock": "node scripts/config.mjs lock",
     "prebuild": "npm run config:check",
     "build": "wrangler deploy --env dev --dry-run",
-    "predeploy:dev": "npm run config:check && npm run typecheck && npm test",
+    "predeploy:dev": "npm run config:check && npm run typecheck && npm test && npm run deploy:preflight",
     "deploy:dev": "wrangler deploy --env dev",
-    "story": "node scripts/story.mjs"
+    "story": "node scripts/story.mjs",
+    "deploy:preflight": "node scripts/preflight.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261119.1",

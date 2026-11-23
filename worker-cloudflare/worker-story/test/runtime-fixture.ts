@@ -7,9 +7,11 @@ export default {
     const AI = { async run(_model: string, input: { messages: { content: string }[] }) {
       const data = JSON.parse(input.messages[1].content);
       const photos: { photo_id: string }[] = data.photos;
-      const stories = Array.from({ length: data.story_count }, (_, i) => {
-        const ids = (i === data.story_count - 1 ? photos.slice(i) : [photos[i]]).map(photo => photo.photo_id);
-        return { title: `本地合成故事${i + 1}`, summary: '测试场景总结', source_photo_ids: ids, image_prompt: '2×2四格，统一漫画风格，无文字。',
+      // 固定的mock决策：模拟模型选择2个，而不是用上限或默认3个替代模型决策。
+      const count = data.story_count ?? Math.min(2, data.max_stories);
+      const stories = Array.from({ length: count }, (_, i) => {
+        const ids = (i === count - 1 ? photos.slice(i) : [photos[i]]).map(photo => photo.photo_id);
+        return { title: `本地合成故事${i + 1}`, summary: '测试场景总结', ...(/^P\d{3}$/.test(ids[0]) ? {} : { source_photo_ids: ids }), image_prompt: '2×2四格，统一漫画风格，无文字。',
           panels: Array.from({ length: 4 }, (_, panel) => ({ panel: panel + 1, description: '测试构图', image_prompt: '场景全景与细节特写，无水印。', source_photo_ids: ids })) };
       });
       return Response.json({ id: 'local-fixture', choices: [{ message: { role: 'assistant', content: JSON.stringify({ daily_summary: '合成数据全天回顾', stories }) }, finish_reason: 'stop' }] });

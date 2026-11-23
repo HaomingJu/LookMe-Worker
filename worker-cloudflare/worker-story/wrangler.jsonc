@@ -8,14 +8,23 @@
   "preview_urls": false,
   "routes": [],
   // 独立 HTTP Worker：没有 Cron、Queue、R2，也不加入现有自动部署管道。
-  // 发布前按部署 Skill 确认域名；当前未设置任何公网入口。
+  // dev 使用独立故事域名；首次绑定与真实模型调用已分别确认。
   "env": {
     "dev": {
       "name": "lookme-story-dev",
       "workers_dev": false,
       "preview_urls": false,
-      "routes": [],
-      "vars": { "STORY_GENERATION_ENABLED": false },
+      "routes": [{
+        "pattern": "story.fudaixuexue.eu.cc",
+        "custom_domain": true,
+        "zone_id": "ad14ac2a1d1f349624f8008f963945dc"
+      }],
+      "vars": { "STORY_GENERATION_ENABLED": true },
+      "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1,
+        "logs": { "enabled": true, "invocation_logs": true }
+      },
       "ai": { "binding": "AI" },
       "d1_databases": [{
         "binding": "DB",

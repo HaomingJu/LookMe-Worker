@@ -1,0 +1,19 @@
+{
+  "currency": "USD",
+  "unit": "per_million_tokens",
+  "verified_at": "2026-11-23",
+  "models": {
+    "@cf/qwen/qwen3.8-27b": {
+      "input": 0.45,
+      "output": 3.2,
+      "cached_input": 0.05,
+      "source": "https://developers.cloudflare.com/workers-ai/models/qwen3.8-27b/"
+    },
+    "@cf/google/gemma-4-26b-a4b-it": {
+      "input": 0.1,
+      "output": 0.3,
+      "cached_input": null,
+      "source": "https://developers.cloudflare.com/workers-ai/models/gemma-4-26b-a4b-it/"
+    }
+  }
+}

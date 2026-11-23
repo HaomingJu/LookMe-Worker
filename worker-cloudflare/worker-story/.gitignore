@@ -4,3 +4,6 @@ node_modules/
 .env*
 *.token
 *.story.json
+
+# 本地生成的故事含用户内容，不提交。
+/story/

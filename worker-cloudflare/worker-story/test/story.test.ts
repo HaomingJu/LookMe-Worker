@@ -25,9 +25,15 @@ function story(photos: PhotoSummary[], count: number) {
     panels: Array.from({ length: 4 }, (_, index) => ({ panel: index + 1, description: '同一场景的不同构图。', source_photo_ids: group.map(x => x.photo_id), image_prompt: '主体全景，清晰构图，暖色调。' })),
   })) };
 }
+function providerStory(photos: PhotoSummary[], count: number): any {
+  const result = story(photos, count);
+  return photos.every(photo => /^P\d{3}$/.test(photo.photo_id))
+    ? { ...result, stories: result.stories.map(({ source_photo_ids: _ids, ...item }) => item) }
+    : result;
+}
 const completion = (value: unknown, reason = 'stop') => Response.json({ id: 'mock-qwen-1', choices: [{ message: { role: 'assistant', content: JSON.stringify(value) }, finish_reason: reason }], usage: { prompt_tokens: 100, completion_tokens: 200, total_tokens: 300 } });
 const request = (body: unknown = { date: DAY, story_count: 1 }, credential: string | null = token, headers: Record<string, string> = {}) => new Request('http://localhost/stories', {
-  method: 'POST', headers: { 'Content-Type': 'application/json', ...(credential ? { Authorization: `Bearer ${credential}` } : {}), ...headers }, body: JSON.stringify(body),
+  method: 'POST', headers: { 'Content-Type': 'application/json', ...(credential ? { Authorization: `Bearer ${credential}` } : {}), ...headers }, body: JSON.stringify(body && typeof body === 'object' && !Array.isArray(body) ? { story_version: 'v4', ...body } : body),
 });
 const invoke = (r = request(), overrides: Partial<Env> = {}) => createWorker(() => NOW).fetch(r, { ...env, ...overrides });
 async function seed(options: { owner?: string; uploaded?: number; captured?: number; version?: string; status?: string; model?: string; text?: string } = {}) {
@@ -57,7 +63,7 @@ beforeEach(async () => {
   owner = crypto.randomUUID(); token = 'lm_' + crypto.randomUUID().replaceAll('-', '').repeat(2); tokenId = crypto.randomUUID();
   await db.prepare('INSERT INTO users(user_id,created_at_ms) VALUES (?,?)').bind(owner, NOW - 1000).run();
   await db.prepare('INSERT INTO user_tokens(token_id,user_id,token_hash,created_at_ms,expires_at_ms) VALUES (?,?,?,?,?)').bind(tokenId, owner, await sha256(token), NOW - 1000, NOW + 10000).run();
-  ai = vi.fn(async (_model, input) => { const data = JSON.parse(input.messages[1].content); return completion(story(data.photos, data.story_count)); });
+  ai = vi.fn(async (_model, input) => { const data = JSON.parse(input.messages[1].content); return completion(providerStory(data.photos, data.story_count)); });
   env = { DB: db, AI: { run: ai } as any, STORY_GENERATION_ENABLED: true };
   vi.spyOn(console, 'info').mockImplementation(() => {});
 });
@@ -73,7 +79,7 @@ describe('手动故事主链路', () => {
     expect(response.headers.get('Cache-Control')).toBe('private, no-store');
     const data = await response.json() as any;
     expect(data).toMatchObject({ date: DAY, timezone: 'Asia/Shanghai', date_basis: 'uploaded_at_ms', day_complete: true, photo_count: 3, story_count: 2,
-      story_version: 'v1', analysis_version: 'v2', model: MODEL, provider_request_id: 'mock-qwen-1' });
+      story_version: 'v4', analysis_version: 'v2', model: MODEL, provider_request_id: 'mock-qwen-1' });
     expect(data.input_sha256).toMatch(/^[a-f0-9]{64}$/);
     expect(data.stories).toHaveLength(2);
     expect(data.stories.flatMap((s: any) => s.source_photo_ids)).toEqual(ids);
@@ -81,7 +87,7 @@ describe('手动故事主链路', () => {
     expect(data.sources[0]).not.toHaveProperty('summary');
     const [model, input, options] = ai.mock.calls[0];
     expect(model).toBe(MODEL); expect(options.returnRawResponse).toBe(true);
-    expect(input).toMatchObject({ stream: false, reasoning_effort: 'low', max_completion_tokens: 12288, response_format: { type: 'json_schema', json_schema: { strict: true } } });
+    expect(input).toMatchObject({ stream: false, reasoning_effort: 'low', max_completion_tokens: 6144, chat_template_kwargs: { enable_thinking: false }, response_format: { type: 'json_schema', json_schema: { strict: true } } });
     expect(input.messages[0].role).toBe('system');
     expect(JSON.stringify(input)).not.toContain(token);
     expect(JSON.stringify(input)).not.toContain('object_key');
@@ -184,14 +190,14 @@ describe('模型错误与输出约束', () => {
   it.each(['transport', 'http', 'truncated', 'null', 'invalid_json', 'wrong_story_count', 'oversized', 'unknown_source'])('模型 %s 不自动重试或返回假成功', async kind => {
     await seed();
     ai.mockImplementation(async (_m, input) => {
-      const body = JSON.parse(input.messages[1].content); const result = story(body.photos, body.story_count);
+      const body = JSON.parse(input.messages[1].content); const result = providerStory(body.photos, body.story_count);
       if (kind === 'transport') throw new Error(token + '原始错误');
       if (kind === 'http') return new Response('私密响应', { status: 500 });
       if (kind === 'truncated') return completion(result, 'length');
       if (kind === 'null') return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: null } }] });
       if (kind === 'invalid_json') return new Response('not json');
       if (kind === 'oversized') return new Response('x'.repeat(262145));
-      if (kind === 'unknown_source') result.stories[0].source_photo_ids = ['other-user-photo'];
+      if (kind === 'unknown_source') result.stories[0].panels[0].source_photo_ids = ['other-user-photo'];
       if (kind === 'wrong_story_count') result.stories = [];
       return completion(result);
     });
@@ -205,7 +211,8 @@ describe('模型错误与输出约束', () => {
     for (const stallBody of [false, true]) {
       const cancel = vi.fn();
       const run = vi.fn(() => stallBody ? Promise.resolve(new Response(new ReadableStream({ cancel }))) : new Promise(() => {}));
-      await expect(generate({ run } as any, p, '{}', 1, [photoSummary('a')])).rejects.toMatchObject({ status: 504, code: 'model_timeout' });
+      await expect(generate({ run } as any, p, '{}', 1, [photoSummary('a')])).rejects.toMatchObject({ status: 504, code: 'model_timeout',
+        details: { model_stage: stallBody ? 'reading_body' : 'waiting_headers', headers_ms: stallBody ? expect.any(Number) : null } });
       expect(run).toHaveBeenCalledOnce();
       expect(run.mock.calls[0][2].signal.aborted).toBe(true);
       if (stallBody) expect(cancel).toHaveBeenCalled();
@@ -223,6 +230,79 @@ describe('模型错误与输出约束', () => {
       (r: any) => { r.stories[0].extra = true; },
       (r: any) => { r.stories[0].image_prompt = ''; },
     ]) { const result = story(photos, 2); mutate(result); expect(() => validateResult(result, 2, photos)).toThrow(); }
+  });
+  it('v2显式关闭thinking并返回阶段计时，v1保持原有协议和预算', async () => {
+    await seed();
+    const first = await (await invoke(request({ date: DAY, story_count: 1, story_version: 'v1' }))).json() as any;
+    expect(first.story_version).toBe('v1');
+    expect(ai.mock.calls[0][1]).not.toHaveProperty('chat_template_kwargs');
+    expect(ai.mock.calls[0][1].max_completion_tokens).toBe(12288);
+    const second = await (await invoke(request({ date: DAY, story_count: 1, story_version: 'v2' }))).json() as any;
+    expect(second.story_version).toBe('v2');
+    expect(ai.mock.calls[1][1]).toMatchObject({ chat_template_kwargs: { enable_thinking: false }, max_completion_tokens: 6144 });
+    expect(second.model_timings).toMatchObject({ headers_ms: expect.any(Number), body_ms: expect.any(Number), total_ms: expect.any(Number), response_bytes: expect.any(Number) });
+    expect(JSON.stringify(vi.mocked(console.info).mock.calls)).toContain('headers_received');
+  });
+  it('模型HTTP错误只返回状态和阶段，不泄露上游正文', async () => {
+    await seed(); ai.mockResolvedValueOnce(new Response('上游私密正文', { status: 503 }));
+    const response = await invoke(); const data = await response.json() as any;
+    expect(data).toMatchObject({ error: 'model_response_error', provider_http_status: 503, model_stage: 'reading_body', model_call_attempted: true });
+    expect(JSON.stringify(data)).not.toContain('上游私密正文'); expect(ai).toHaveBeenCalledOnce();
+  });
+  it('输出校验失败返回确切错误码与位置，保留用量但不泄露正文', async () => {
+    await seed();
+    ai.mockImplementationOnce(async (_model, input) => {
+      const body = JSON.parse(input.messages[1].content);
+      const result = providerStory(body.photos, body.story_count);
+      result.stories[0].source_photo_ids = ['不应回显的伪造ID'];
+      return completion(result);
+    });
+    const response = await invoke(request({ date: DAY, story_count: 1, story_version: 'v2' })); const data = await response.json() as any;
+    expect(response.status).toBe(502);
+    expect(data).toMatchObject({ error: 'invalid_story_result', validation_code: 'unknown_source_id', validation_path: '$.stories[0].source_photo_ids',
+      model_stage: 'validating_output', provider_request_id: 'mock-qwen-1', usage: { prompt_tokens: 100, completion_tokens: 200, total_tokens: 300 } });
+    expect(data.request_id).toMatch(/^[a-f0-9-]{36}$/);
+    expect(JSON.stringify(data)).not.toContain('不应回显的伪造ID');
+    expect(JSON.stringify(vi.mocked(console.info).mock.calls)).not.toContain('不应回显的伪造ID');
+    expect(ai).toHaveBeenCalledOnce();
+  });
+  it('模型content不是JSON时报告独立原因而非吞掉错误', async () => {
+    await seed();
+    ai.mockResolvedValueOnce(Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: '非JSON私密内容' } }] }));
+    expect(await (await invoke()).json()).toMatchObject({ error: 'invalid_story_result', validation_code: 'invalid_story_json', validation_path: '$' });
+  });
+  it('v3经鉴权和D1取数后只发送短编号，返回真实UUID且不调用第二次模型', async () => {
+    const ids = [await seed({ uploaded: START }), await seed({ uploaded: START + 1 }), await seed({ uploaded: START + 2 })];
+    await seed({ owner: 'other-owner', status: 'missing' });
+    ai.mockImplementationOnce(async (_model, input) => {
+      const data = JSON.parse(input.messages[1].content);
+      expect(data.photos.map((p: any) => p.photo_id)).toEqual(['P001', 'P002', 'P003']);
+      expect(input.response_format.json_schema.schema.properties.stories.items.properties.panels.items.properties.source_photo_ids.items.enum).toEqual(['P001', 'P002', 'P003']);
+      const output: any = story(data.photos, data.story_count);
+      output.stories.forEach((s: any) => { delete s.source_photo_ids; });
+      return completion(output);
+    });
+    const response = await invoke(request({ date: DAY, story_count: 2, story_version: 'v3' }));
+    expect(response.status).toBe(200);
+    const data = await response.json() as any;
+    expect(data.stories.flatMap((s: any) => s.source_photo_ids)).toEqual(ids);
+    expect(data.sources.map((p: any) => p.photo_id)).toEqual(ids);
+    expect(data.stories.every((s: any) => s.panels.every((p: any) => p.source_photo_ids.every((id: string) => ids.includes(id))))).toBe(true);
+    expect(ai).toHaveBeenCalledOnce();
+  });
+  it('v4将全部摘要发送给模型，允许分镜精选并返回未引用清单', async () => {
+    const ids = [await seed({ uploaded: START }), await seed({ uploaded: START + 1 }), await seed({ uploaded: START + 2 })];
+    ai.mockImplementationOnce(async (_model, input) => {
+      const data = JSON.parse(input.messages[1].content);
+      expect(data.photos).toHaveLength(3);
+      return completion(providerStory(data.photos.slice(0,2), 1));
+    });
+    const response=await invoke(request({date:DAY,story_count:1,story_version:'v4'}));
+    expect(response.status).toBe(200);
+    const data=await response.json() as any;
+    expect(data.sources.map((p: any)=>p.photo_id)).toEqual(ids);
+    expect(data.coverage).toEqual({policy:'representative_panels',input_photo_count:3,referenced_photo_count:2,all_photos_referenced:false,unreferenced_photo_ids:[ids[2]]});
+    expect(ai).toHaveBeenCalledOnce();
   });
   it('日志不含凭据、摘要、故事或提示词', async () => {
     await seed({ text: '仅用于检查不记录的摘要标记' }); await invoke();
@@ -245,3 +325,108 @@ it('真实workerd中路由/鉴权执行，不连接远端', async () => {
     expect((await runtime.dispatchFetch('http://localhost/stories')).status).toBe(405);
   } finally { await runtime.dispose(); }
 }, 30000);
+
+// 新默认请求不使用旧测试帮助函数的v4兼容参数。
+const autoRequest = (body: unknown = { date: DAY }) => new Request('http://localhost/stories', {
+  method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+});
+describe('自动故事数与模型选择', () => {
+  it.each([1, 2, 4])('默认Qwen：AI可决定输出%s个故事，不固定为3个或上限', async count => {
+    for (let i=0;i<4;i++) await seed({ uploaded: START+i });
+    ai.mockImplementationOnce(async (model, input) => {
+      expect(model).toBe(MODEL);
+      const data=JSON.parse(input.messages[1].content);
+      expect(data).not.toHaveProperty('story_count');
+      expect(data).toMatchObject({story_count_mode:'auto',max_stories:4});
+      expect(input.messages[0].content).toContain('自行决定故事数量');
+      const schema=input.response_format.json_schema.schema.properties.stories;
+      expect(schema.minItems).toBe(1);expect(schema.maxItems).toBe(4);
+      return completion(providerStory(data.photos,count));
+    });
+    const response=await invoke(autoRequest());expect(response.status).toBe(200);
+    const data=await response.json() as any;
+    expect(data).toMatchObject({story_version:'v5',model:MODEL,story_count_mode:'auto',story_count:count,photo_count:4});
+    expect(data.stories).toHaveLength(count);expect(ai).toHaveBeenCalledOnce();
+  });
+  it('Gemma选择独立锁定版本，不传Qwen专用参数，也不回退到Qwen', async () => {
+    await seed();
+    ai.mockImplementationOnce(async (model,input) => {
+      expect(model).toBe(ANALYSIS_MODEL);expect(input).not.toHaveProperty('reasoning_effort');
+      expect(input.chat_template_kwargs).toEqual({enable_thinking:false});
+      const data=JSON.parse(input.messages[1].content);
+      return completion(providerStory(data.photos,1));
+    });
+    const response=await invoke(autoRequest({date:DAY,model:ANALYSIS_MODEL}));expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({story_version:'v5-gemma',model:ANALYSIS_MODEL,story_count:1,story_count_mode:'auto'});
+    expect(ai).toHaveBeenCalledOnce();
+  });
+  it.each([
+    [{date:DAY,model:'@cf/unknown/model'},'unsupported_model'],
+    [{date:DAY,model:null},'unsupported_model'],
+    [{date:DAY,model:7},'unsupported_model'],
+    [{date:DAY,model:ANALYSIS_MODEL,story_version:'v5'},'model_version_mismatch'],
+    [{date:DAY,model:MODEL,story_version:'v5-gemma'},'model_version_mismatch'],
+    [{date:DAY,story_version:'missing'},'invalid_story_version'],
+    [{date:DAY,story_count:3},'story_count_not_allowed'],
+    [{date:DAY,story_count:null},'story_count_not_allowed'],
+  ])('非法模型/数量在推理前拒绝：%j',async (body,error) => {
+    const response=await invoke(autoRequest(body));expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({error,model_call_attempted:false});expect(ai).not.toHaveBeenCalled();
+  });
+  it.each([0,3,9])('拒绝空故事或超过照片数/上限的数量%s，不截断结果',async count => {
+    await seed();await seed({uploaded:START+1});
+    ai.mockImplementationOnce(async (_model,input) => {
+      const data=JSON.parse(input.messages[1].content);
+      const output=providerStory(data.photos,1);
+      output.stories=Array.from({length:count},()=>output.stories[0]);
+      return completion(output);
+    });
+    const response=await invoke(autoRequest());expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({validation_code:'invalid_story_count',automatic_retry:false});expect(ai).toHaveBeenCalledOnce();
+  });
+  it('少于旧默认3张仍能自动生成，仍拒绝尚未就绪的摘要',async () => {
+    await seed();ai.mockImplementationOnce(async (_model,input)=>completion(providerStory(JSON.parse(input.messages[1].content).photos,1)));
+    expect((await invoke(autoRequest())).status).toBe(200);
+    await seed({status:'missing'});
+    expect((await invoke(autoRequest())).status).toBe(409);expect(ai).toHaveBeenCalledOnce();
+  });
+});
+
+it('自动模式的8故事资源上限仍生效，不要求必须生成上限数量',async()=>{
+  for(let i=0;i<10;i++)await seed({uploaded:START+i});
+  ai.mockImplementationOnce(async(_model,input)=>{
+    const data=JSON.parse(input.messages[1].content);expect(data.max_stories).toBe(8);
+    expect(input.response_format.json_schema.schema.properties.stories).toMatchObject({minItems:1,maxItems:8});
+    return completion(providerStory(data.photos,2));
+  });
+  const response=await invoke(autoRequest());expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({story_count:2,photo_count:10,story_count_mode:'auto'});
+});
+
+it('成功请求返回模型、服务端耗时、供应商用量及公开价估算',async()=>{
+  await seed();
+  ai.mockImplementationOnce(async(_m,input)=>completion(providerStory(JSON.parse(input.messages[1].content).photos,1)));
+  const response=await invoke(autoRequest());expect(response.status).toBe(200);
+  const body=await response.json() as any;
+  expect(body).toMatchObject({model:MODEL,request_duration_ms:expect.any(Number),usage:{prompt_tokens:100,completion_tokens:200,total_tokens:300},
+    cost:{is_estimate:true,actual_billed_usd:null,currency:'USD',estimated_usd:0.000685,pricing:{input:0.45,output:3.2}}});
+  expect(body.request_duration_ms).toBeGreaterThanOrEqual(body.model_timings.total_ms);
+});
+it.each([[402,0,'model_payment_required'],[429,3036,'model_quota_exceeded'],[403,5035,'model_paid_plan_required']])('上游计费错误向客户端返回提示与未知费用：%s/%s',async(status,code,error)=>{
+  await seed();ai.mockResolvedValueOnce(Response.json({errors:[{code,message:token+'私密错误'}]},{status:status as number}));
+  const response=await invoke(autoRequest());const body=await response.json() as any;
+  expect(body).toMatchObject({error,model:MODEL,message:expect.any(String),request_duration_ms:expect.any(Number),usage:{},
+    cost:{status:'unavailable',estimated_usd:null,reason:'missing_usage'},model_call_attempted:true,automatic_retry:false,may_have_been_billed:true});
+  expect(JSON.stringify(body)).not.toContain(token);expect(JSON.stringify(vi.mocked(console.info).mock.calls)).not.toContain(token);
+  expect(ai).toHaveBeenCalledOnce();
+});
+it('结果校验失败仍保留已经返回的用量并估算，不能丢掉消耗',async()=>{
+  await seed();ai.mockResolvedValueOnce(completion({daily_summary:'合成',stories:[]}));
+  const body=await (await invoke(autoRequest())).json() as any;
+  expect(body).toMatchObject({error:'invalid_story_result',model:MODEL,usage:{prompt_tokens:100,completion_tokens:200},cost:{estimated_usd:0.000685}});
+});
+it('非请求模型阶段失败不冒称模型已调用、也不报告零收费',async()=>{
+  const body=await (await invoke(autoRequest({date:DAY,model:'bad'}))).json() as any;
+  expect(body).toMatchObject({model_call_attempted:false,model:null,cost:null,request_duration_ms:expect.any(Number)});
+  expect(ai).not.toHaveBeenCalled();
+});
