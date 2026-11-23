@@ -1,9 +1,12 @@
+import analysisProfiles from '../../config/analysis-profiles.json';
+const MODEL = analysisProfiles.profiles.v2.model;
+const CAPTION_PROMPT = analysisProfiles.profiles.v2.prompt;
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { readFile, readdir } from 'node:fs/promises';
 import worker, { createWorker } from '../src/index';
-import { CAPTION_PROMPT, caption } from '../src/workers-ai';
-import { LEASE_MS, MAX_PREPARATION_ATTEMPTS, MODEL, type Env } from '../src/types';
+import { caption } from '../src/workers-ai';
+import { LEASE_MS, MAX_PREPARATION_ATTEMPTS, type Env } from '../src/types';
 
 let mf: Miniflare;
 let db: D1Database;
@@ -134,7 +137,7 @@ describe('Queue 消费与可信数据', () => {
     expect(get).not.toHaveBeenCalled();
   });
   it.each([null, [], 'raw JSON string', {}, { photo_id: 'bad', analysis_version: 'v2' },
-    { photo_id: crypto.randomUUID(), analysis_version: 'v3' },
+    { photo_id: crypto.randomUUID(), analysis_version: 'not-configured' },
     { photo_id: crypto.randomUUID(), analysis_version: 'v1' },
     { ...bodyFor(crypto.randomUUID()), object_key: 'attacker/path' },
     { ...bodyFor(crypto.randomUUID()), owner_id: 'attacker' },

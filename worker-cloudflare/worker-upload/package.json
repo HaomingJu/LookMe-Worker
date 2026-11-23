@@ -12,7 +12,12 @@
     "users": "node scripts/users.mjs",
     "test:clients": "python3 -I test/clients/verify.py",
     "test:batch": "python3 -I test/clients/verify_batch.py",
-    "test:batch:all": "python3 -I test/clients/verify_batch.py --all"
+    "test:batch:all": "python3 -I test/clients/verify_batch.py --all",
+    "config:check": "node ../scripts/pipeline.mjs check",
+    "profiles:lock": "node ../scripts/pipeline.mjs lock-profiles",
+    "pipeline:plan": "node ../scripts/pipeline.mjs plan",
+    "pipeline:deploy:dev": "node ../scripts/pipeline.mjs deploy-dev",
+    "prebuild": "node ../scripts/pipeline.mjs check"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261119.1",

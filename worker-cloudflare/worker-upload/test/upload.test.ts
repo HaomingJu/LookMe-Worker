@@ -5,6 +5,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { encode } from 'jpeg-js';
 import worker from '../src/index';
 
+const dispatchDisabled = { PHOTO_ANALYSIS_ENABLED: false, OUTBOX_BATCH_SIZE: 10, OUTBOX_LEASE_SECONDS: 60, OUTBOX_RETRY_BASE_SECONDS: 60, OUTBOX_RETRY_MAX_SECONDS: 3600 };
 const TOKEN = 'lm_' + 'a'.repeat(64);
 const OTHER_TOKEN = 'lm_' + 'b'.repeat(64);
 const tokenHash = async (token: string) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token))), b => b.toString(16).padStart(2, '0')).join('');
@@ -27,7 +28,7 @@ const upload = async (body: FormData, token: string | null = TOKEN) => {
 beforeAll(async () => {
   const bundle = await build({ entryPoints: ['src/index.ts'], bundle: true, write: false, format: 'esm', platform: 'browser' });
   mf = new Miniflare(convertV4MiniflareOptions({ modules: true, script: bundle.outputFiles[0].text, compatibilityDate: '2026-11-19',
-    d1Databases: ['DB'], r2Buckets: ['PHOTOS'] }));
+    d1Databases: ['DB'], r2Buckets: ['PHOTOS'], bindings: dispatchDisabled }));
   db = await mf.getD1Database('DB');
   bucket = await mf.getR2Bucket('PHOTOS');
   // D1 exec 不解析多行语句，按本项目迁移的分号切分。
@@ -160,8 +161,9 @@ it('R2 写失败不得写入 D1；D1 失败不得报告成功，也不盲删 R2 
     let puts = 0;
     let deletes = 0;
     const env = {
+      ...dispatchDisabled,
       DB: { prepare: (sql: string) => ({ bind: () => ({ first: async () => sql.includes('JOIN users') ? { user_id: 'test-owner' } : null,
-        run: async () => { inserts++; throw new Error('db unavailable'); } }) }) },
+        run: async () => {} }) }), batch: async () => { inserts++; throw new Error('db unavailable'); } },
       PHOTOS: { put: async () => { puts++; if (failR2) throw new Error('r2 unavailable'); return {}; }, delete: async () => { deletes++; } },
     };
     const response = await worker.fetch(new Request('http://localhost/photos', { method: 'POST', body: form(), headers: { Authorization: `Bearer ${TOKEN}` } }), env as any);

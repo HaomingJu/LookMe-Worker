@@ -1,12 +1,16 @@
+import { DEFAULT_ANALYSIS_PROFILE, DEFAULT_ANALYSIS_VERSION } from '../../shared/analysis-config';
+
+export type ImageAnalysisAI = Ai<Record<string, { inputs: ChatCompletionsInput; postProcessedOutputs: ChatCompletionsOutput }>>;
+
 export interface Env {
   DB: D1Database;
   PHOTOS: R2Bucket;
-  AI: Ai;
+  AI: ImageAnalysisAI;
 }
 
 export interface AnalysisMessage {
   photo_id: string;
-  analysis_version: typeof ANALYSIS_VERSION;
+  analysis_version: string;
 }
 
 export interface Photo {
@@ -32,8 +36,8 @@ export interface Analysis extends AnalysisMessage {
 }
 
 // v1 保留为历史 Moondream 语义；Gemma 使用新版本，禁止混用结果。
-export const ANALYSIS_VERSION = 'v2';
-export const MODEL = '@cf/google/gemma-4-26b-a4b-it';
+export const ANALYSIS_VERSION = DEFAULT_ANALYSIS_VERSION;
+export const MODEL = DEFAULT_ANALYSIS_PROFILE.model;
 export const LEASE_MS = 120_000;
 export const MAX_PREPARATION_ATTEMPTS = 5;
 export const MAX_IMAGE_BYTES = 2 * 1024 * 1024;

@@ -1,4 +1,4 @@
--- LookMe D1 当前完整结构快照（0001 + 0002 + 0003）；已有库只应用缺失的版本化迁移。
+-- LookMe D1 当前完整结构快照（0001 + 0002 + 0003 + 0004）；已有库只应用缺失的版本化迁移。
 -- 时间统一为 UTC Unix 毫秒；owner_id 来自认证，不接受客户端自报。
 CREATE TABLE photos (
   photo_id TEXT PRIMARY KEY NOT NULL,
@@ -125,3 +125,25 @@ CREATE TABLE photo_analyses (
 
 CREATE INDEX photo_analyses_status_retry ON photo_analyses(status, next_attempt_at_ms);
 CREATE INDEX photo_analyses_status_lease ON photo_analyses(status, lease_until_ms);
+
+-- 仅新上传写入 Outbox；不扫描或补投历史照片。
+-- 与 photos 在同一 D1 batch 事务中插入，Queue 接收成功不等于 AI 分析完成。
+CREATE TABLE photo_analysis_dispatch (
+  photo_id TEXT NOT NULL REFERENCES photos(photo_id) ON DELETE RESTRICT,
+  analysis_version TEXT NOT NULL CHECK(length(analysis_version) BETWEEN 1 AND 64),
+  dispatch_after_ms INTEGER NOT NULL,
+  published_at_ms INTEGER,
+  publish_attempts INTEGER NOT NULL DEFAULT 0 CHECK(publish_attempts >= 0),
+  lease_token TEXT,
+  lease_until_ms INTEGER,
+  error_code TEXT,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY(photo_id, analysis_version),
+  CHECK((lease_token IS NULL) = (lease_until_ms IS NULL)),
+  CHECK(published_at_ms IS NULL OR lease_token IS NULL)
+);
+
+CREATE INDEX photo_analysis_dispatch_pending
+  ON photo_analysis_dispatch(dispatch_after_ms, lease_until_ms)
+  WHERE published_at_ms IS NULL;

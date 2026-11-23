@@ -1,6 +1,7 @@
 import { decode } from 'jpeg-js';
+import { type DispatchEnv, dispatchSafely, insertDispatch, newDispatchVersion } from './outbox';
 
-interface Env {
+interface Env extends DispatchEnv {
   DB: D1Database;
   PHOTOS: R2Bucket;
 }
@@ -104,7 +105,7 @@ function photoResponse(photo: Photo, status: number): Response {
   return json({ photo_id: photo.photo_id, uploaded_at: new Date(photo.uploaded_at_ms).toISOString(),
     ...(photo.captured_at_ms === null ? {} : { captured_at: new Date(photo.captured_at_ms).toISOString() }) }, status);
 }
-async function upload(request: Request, env: Env): Promise<Response> {
+async function upload(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const owner = await authenticate(request, env);
   const contentType = request.headers.get('Content-Type') ?? '';
   if (!/^multipart\/form-data\s*;/i.test(contentType)) throw new HttpError(415, 'multipart_required');
@@ -138,29 +139,44 @@ async function upload(request: Request, env: Env): Promise<Response> {
     return photoResponse(photo, 200);
   };
   const existing = await lookup();
-  if (existing) return existingResponse(existing);
+  if (existing) {
+    const response = existingResponse(existing);
+    // 只补投已有 Outbox，不给旧照片或新分析版本凭空建任务。
+    ctx.waitUntil(dispatchSafely(env, existing.photo_id));
+    return response;
+  }
+  const analysisVersion = await newDispatchVersion(env);
   const id = crypto.randomUUID();
   const key = `photos/v1/${owner}/${id}/${hash}.jpg`;
   const uploaded = Date.now();
   const object = await env.PHOTOS.put(key, bytes, { httpMetadata: { contentType: 'image/jpeg' } });
   if (!object) throw new Error('object_not_saved');
   try {
-    await env.DB.prepare('INSERT INTO photos (photo_id, owner_id, client_photo_id, object_key, sha256, mime_type, byte_size, width, height, source, captured_at_ms, captured_at_source, uploaded_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .bind(id, owner, clientId.toLowerCase(), key, hash, 'image/jpeg', bytes.length, size.width, size.height, source, captured, capturedSource, uploaded).run();
+    const insertPhoto = env.DB.prepare('INSERT INTO photos (photo_id, owner_id, client_photo_id, object_key, sha256, mime_type, byte_size, width, height, source, captured_at_ms, captured_at_source, uploaded_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(id, owner, clientId.toLowerCase(), key, hash, 'image/jpeg', bytes.length, size.width, size.height, source, captured, capturedSource, uploaded);
+    await env.DB.batch(analysisVersion === null ? [insertPhoto] : [insertPhoto, insertDispatch(env.DB, id, analysisVersion, uploaded)]);
   } catch (error) {
     // 并发上传可能已由另一请求落库；不删除可能仍被引用的对象。
     const winner = await lookup();
-    if (winner) return existingResponse(winner);
+    if (winner) {
+      const response = existingResponse(winner);
+      ctx.waitUntil(dispatchSafely(env, winner.photo_id));
+      return response;
+    }
     throw error;
   }
+  ctx.waitUntil(dispatchSafely(env, id));
   return photoResponse({ photo_id: id, sha256: hash, source, captured_at_ms: captured, captured_at_source: capturedSource, uploaded_at_ms: uploaded }, 201);
 }
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+    await dispatchSafely(env);
+  },
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     try {
       if (new URL(request.url).pathname !== '/photos') return json({ error: 'not_found' }, 404);
       if (request.method !== 'POST') return new Response(null, { status: 405, headers: { Allow: 'POST' } });
-      return await upload(request, env);
+      return await upload(request, env, ctx);
     } catch (error) {
       if (error instanceof HttpError) return json({ error: error.code }, error.status);
       // 不记录请求正文、凭据或底层异常，避免意外泄露业务数据。

@@ -1,6 +1,6 @@
 import type { AnalysisMessage } from './types';
 
-export type Stage = 'validate_message' | 'load_photo' | 'claim_analysis' | 'read_analysis' | 'read_r2'
+export type Stage = 'validate_message' | 'check_analysis_config' | 'load_photo' | 'claim_analysis' | 'read_analysis' | 'read_r2'
   | 'check_ai_binding' | 'verify_image' | 'encode_image' | 'mark_submitted' | 'call_provider' | 'save_result' | 'persist_failure';
 interface Details {
   code?: string;

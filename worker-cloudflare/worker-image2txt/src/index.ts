@@ -1,8 +1,9 @@
+import { AnalysisConfigError, getAnalysisProfile, isAnalysisVersion } from '../../shared/analysis-config';
 import { imageDataUrl, readBounded } from './bytes';
 import { MessageLog } from './logging';
 import { caption, ProviderUncertain, PROVIDER_TIMEOUT_MS } from './workers-ai';
 import { Store } from './store';
-import { type AnalysisMessage, type Env, type Photo, ANALYSIS_VERSION, MODEL, MAX_IMAGE_BYTES, retrySeconds } from './types';
+import { type AnalysisMessage, type Env, type Photo, MAX_IMAGE_BYTES, retrySeconds } from './types';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -10,8 +11,8 @@ function parseMessage(body: unknown): AnalysisMessage | null {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
   const value = body as Record<string, unknown>;
   if (Object.keys(value).length !== 2 || typeof value.photo_id !== 'string' || !UUID.test(value.photo_id)
-    || value.analysis_version !== ANALYSIS_VERSION) return null;
-  return { photo_id: value.photo_id.toLowerCase(), analysis_version: ANALYSIS_VERSION };
+    || !isAnalysisVersion(value.analysis_version)) return null;
+  return { photo_id: value.photo_id.toLowerCase(), analysis_version: value.analysis_version };
 }
 
 class PreparationError extends Error {
@@ -50,7 +51,8 @@ interface Dependencies {
 export function createWorker(deps: Dependencies = { now: Date.now }) {
   async function process(key: AnalysisMessage | null, log: MessageLog, env: Env) {
     if (!key) { log.retry('invalid_message'); return; }
-    const store = new Store(env.DB, key);
+    const profile = await log.step('check_analysis_config', () => getAnalysisProfile(key.analysis_version));
+    const store = new Store(env.DB, key, profile);
     const photo = await log.step('load_photo', () => store.photo());
     if (!photo) { log.retry('photo_not_found'); return; }
     const claim = await log.step('claim_analysis', async () => {
@@ -59,7 +61,7 @@ export function createWorker(deps: Dependencies = { now: Date.now }) {
     });
     if (!claim) {
       const current = await log.step('read_analysis', () => store.get());
-      if (current && current.model !== MODEL) { log.retry('analysis_model_mismatch'); return; }
+      if (current && current.model !== profile.model) { log.retry('analysis_model_mismatch'); return; }
       if (current?.status === 'succeeded') { log.ack('already_succeeded'); return; }
       const next = current?.status === 'running' ? current.lease_until_ms : current?.next_attempt_at_ms;
       log.retry('analysis_not_claimed', Math.min(900, Math.max(60, Math.ceil(((next ?? 0) - deps.now()) / 1000))),
@@ -84,7 +86,7 @@ export function createWorker(deps: Dependencies = { now: Date.now }) {
     if (!submitted) { log.retry('lease_lost_before_submission'); return; }
     let result;
     try {
-      result = await log.step('call_provider', () => caption(image, env.AI),
+      result = await log.step('call_provider', () => caption(image, env.AI, PROVIDER_TIMEOUT_MS, profile),
         { timeout_ms: PROVIDER_TIMEOUT_MS });
     } catch (error) {
       const code = error instanceof ProviderUncertain ? error.code : 'provider_outcome_unknown';
@@ -113,10 +115,11 @@ export function createWorker(deps: Dependencies = { now: Date.now }) {
         const key = parseMessage(message.body);
         const log = new MessageLog(message, key, deps.now);
         try { await process(key, log, env); }
-        catch {
+        catch (error) {
           // 平台 CPU/内存强制终止不保证进入 catch；需结合平台 invocation outcome。
-          log.failure('storage_or_processing_error');
-          log.retry('storage_or_processing_error');
+          const code = error instanceof AnalysisConfigError ? error.code : 'storage_or_processing_error';
+          log.failure(code);
+          log.retry(code);
         }
       }
     },

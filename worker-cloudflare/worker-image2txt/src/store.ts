@@ -1,8 +1,9 @@
-import { type Analysis, type AnalysisMessage, type Photo, LEASE_MS, MAX_PREPARATION_ATTEMPTS, MODEL, retrySeconds } from './types';
+import type { AnalysisProfile } from '../../shared/analysis-config';
+import { type Analysis, type AnalysisMessage, type Photo, LEASE_MS, MAX_PREPARATION_ATTEMPTS, retrySeconds } from './types';
 import type { Caption } from './workers-ai';
 
 export class Store {
-  constructor(private readonly db: D1Database, private readonly key: AnalysisMessage) {}
+  constructor(private readonly db: D1Database, private readonly key: AnalysisMessage, private readonly profile: AnalysisProfile) {}
 
   private statement(sql: string, ...values: unknown[]) {
     return this.db.prepare(sql).bind(...values, this.key.photo_id, this.key.analysis_version);
@@ -17,7 +18,7 @@ export class Store {
     await this.db.prepare(`INSERT INTO photo_analyses
       (photo_id, analysis_version, model, next_attempt_at_ms, created_at_ms, updated_at_ms)
       VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(photo_id, analysis_version) DO NOTHING`)
-      .bind(this.key.photo_id, this.key.analysis_version, MODEL, now, now, now).run();
+      .bind(this.key.photo_id, this.key.analysis_version, this.profile.model, now, now, now).run();
   }
 
   get() {
@@ -40,7 +41,7 @@ export class Store {
       WHERE provider_attempt_id IS NULL AND attempt_count < ? AND next_attempt_at_ms <= ?
       AND (status IN ('queued', 'retry_wait') OR (status = 'running' AND lease_until_ms <= ?))
       AND model = ? AND photo_id = ? AND analysis_version = ? RETURNING *`,
-      crypto.randomUUID(), now + LEASE_MS, now, MAX_PREPARATION_ATTEMPTS, now, now, MODEL).first<Analysis>();
+      crypto.randomUUID(), now + LEASE_MS, now, MAX_PREPARATION_ATTEMPTS, now, now, this.profile.model).first<Analysis>();
   }
 
   prepareFailed(claim: Analysis, now: number, code: string, permanent: boolean) {
