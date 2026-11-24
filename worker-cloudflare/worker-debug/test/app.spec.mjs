@@ -26,15 +26,23 @@ const manyPhotos = count => Array.from({ length: count }, (_, index) => ({ ...ph
 const photoIDs = page => page.locator('.photo-details-button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label').split(' ')[0]));
 
 async function fixtures(page, options = {}) {
-  const calls = { timeline: [], images: [], external: [] };
+  const calls = { timeline: [], images: [], external: [], stories: [], details: [] };
   await page.route('**/*', async route => {
     const request = route.request();
     const url = new URL(request.url());
     if (url.hostname !== 'localhost') { calls.external.push(request.url()); return route.abort(); }
     const authorized = (request.headers().cookie || '').includes('lookme_debug=');
-    if (['/api/users', '/api/timeline'].includes(url.pathname) || url.pathname.startsWith('/photo/')) {
+    if (['/api/users', '/api/timeline', '/api/stories', '/api/story'].includes(url.pathname) || url.pathname.startsWith('/photo/')) {
       if (!authorized) return route.fulfill({ status: 401, json: { error: 'unauthorized' } });
       if (url.pathname === '/api/users') return route.fulfill({ json: { users: options.users ?? users } });
+      if (url.pathname === '/api/stories') {
+        calls.stories.push(url);
+        return options.stories ? options.stories(route,url,calls) : route.fulfill({json:{runs:[],next_cursor:null,date_basis:'uploaded_at_ms'}});
+      }
+      if (url.pathname === '/api/story') {
+        calls.details.push(url);
+        return options.story ? options.story(route,url,calls) : route.fulfill({status:404,json:{error:'story_not_found'}});
+      }
       if (url.pathname === '/api/timeline') {
         calls.timeline.push(url);
         if (options.timeline) return options.timeline(route, url, calls);
@@ -212,7 +220,7 @@ test('照片与故事分开显示，故事入口不触发照片读取或模型�
   await page.locator('#stories-view').click();
   await expect(page.locator('#stories-panel')).toBeVisible();
   await expect(page.locator('#photos-panel')).toBeHidden();
-  await expect(page.locator('#story-status')).toHaveText('暂无历史故事查询接口');
+  await expect(page.locator('#story-status')).toContainText('暂无已登记故事');
   await expect(page.locator('.photo-card')).toHaveCount(0);
   await expect(page.locator('#start-time')).toBeDisabled();
   await expect(page.locator('#end-time')).toBeDisabled();
@@ -354,4 +362,120 @@ test('浏览器存储禁用时仍可收起侧栏和切换视图', async ({ page 
   await expect(page.locator('#stories-panel')).toBeVisible();
   await page.locator('#photos-view').click();
   await expect(page.locator('.photo-card')).toHaveCount(14);
+});
+
+const storyRun = {
+  run_id: '30000000-0000-4000-8000-000000000001', story_date: '2026-11-22', timezone: 'Asia/Shanghai', date_basis: 'uploaded_at_ms',
+  model: '@cf/qwen/qwen3.8-27b', story_version: 'v5', analysis_version: 'v2', status: 'succeeded', created_at_ms: uploadBase,
+  story_count: 1, daily_summary: '合成日记 <img src=x onerror="window.storyInjected=true">', request_duration_ms: 89000,
+  usage: { prompt_tokens: 2643, completion_tokens: 1292, total_tokens: 3935 }, model_timings: { total_ms: 87871 },
+  cost: { currency: 'USD', estimated_usd: 0.00532375, is_estimate: true, basis: 'all_input_at_standard_rate',
+    pricing: { input: 0.45, output: 3.2, cached_input: 0.05, verified_at: '2026-11-23', source: 'https://developers.cloudflare.com/' },
+    note: '公开价格估算，不是账单' },
+};
+const storyResult = { coverage: { input_photo_count: 2, referenced_photo_count: 1, unreferenced_photo_ids: [photos[1].photo_id] },
+  stories: [{ story_id: '40000000-0000-4000-8000-000000000001', title: '合成故事标题', summary: '故事摘要',
+    source_photo_ids: [photos[0].photo_id], image_prompt: '<script>window.storyInjected=true</script>整图提示词'.repeat(20),
+    panels: Array.from({ length: 4 }, (_, i) => ({ panel: i + 1, description: '分镜事实', image_prompt: '分镜提示词', source_photo_ids: [photos[0].photo_id] })) }] };
+
+test('故事网站展示原始模型、耗时、费用和四格，文字安全渲染且手机不溢出', async ({ page }, testInfo) => {
+  const calls = await fixtures(page, {
+    stories: route => route.fulfill({ json: { runs: [storyRun], next_cursor: null } }),
+    story: route => route.fulfill({ json: { status: 'succeeded', result: storyResult } }),
+  });
+  await login(page); await page.locator('#stories-view').click();
+  await expect(page.locator('#date-label')).toHaveText('故事日期（上传日）');
+  await expect(page.locator('#date')).toHaveValue('2026-11-22');
+  await expect(page.locator('.story-run')).toHaveCount(1);
+  await expect(page.locator('.story-run')).toContainText('@cf/qwen/qwen3.8-27b');
+  await expect(page.locator('.story-run')).toContainText('89.00 秒');
+  await expect(page.locator('.story-run')).toContainText('2643');
+  await expect(page.locator('.story-run')).toContainText('USD 0.00532375');
+  await expect(page.locator('.story-run')).toContainText('估算，非实际账单');
+  await page.getByRole('button', { name: '查看故事与四格提示词' }).click();
+  await expect(page.locator('.saved-story')).toHaveCount(1);
+  await expect(page.locator('.saved-story')).not.toHaveAttribute('open');
+  await expect(page.locator('.story-panel-item').first()).toBeHidden();
+  await expect(page.locator('#story-list')).not.toContainText('完整输入');
+  await expect(page.locator('#story-list')).not.toContainText('未引用：');
+  await expect(page.locator('#story-list')).not.toContainText(photos[1].photo_id);
+  await page.locator('.story-toggle').click();
+  await expect(page.locator('.saved-story')).toHaveAttribute('open', '');
+  await expect(page.locator('.story-panel-item')).toHaveCount(4);
+  await expect(page.locator('.saved-story')).toContainText(storyResult.stories[0].story_id);
+  await expect(page.locator('#story-list img')).toHaveCount(0);
+  await expect(page.locator('#story-list script')).toHaveCount(0);
+  expect(await page.evaluate(() => window.storyInjected)).toBeUndefined();
+  expect(calls.details[0].searchParams.get('user')).toBe(users[0].user_id);
+  expect(calls.external).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath('stories-desktop.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('stories-mobile.png') });
+  await page.locator('.story-panels').scrollIntoViewIfNeeded();
+  await expect(page.locator('.story-panel-item').first()).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('stories-mobile-panels.png') });
+});
+
+test('故事分页、失败重试与用户切换不混淆批次', async ({ page }) => {
+  let failed = false;
+  const calls = await fixtures(page, { stories: (route, url) => {
+    if (url.searchParams.get('user') === users[1].user_id) return route.fulfill({ json: { runs: [], next_cursor: null } });
+    if (!url.searchParams.has('cursor')) return route.fulfill({ json: { runs: [storyRun], next_cursor: 'next' } });
+    if (!failed) { failed = true; return route.fulfill({ status: 503, json: { error: 'storage_unavailable' } }); }
+    return route.fulfill({ json: { runs: [{ ...storyRun, run_id: '30000000-0000-4000-8000-000000000002', status: 'needs_review', cost: null, usage: {} }], next_cursor: null } });
+  } });
+  await login(page); await page.locator('#stories-view').click();
+  await expect(page.locator('.story-run')).toHaveCount(1);
+  await page.locator('#more-stories').click();
+  await expect(page.locator('#retry-stories')).toBeVisible();
+  await page.locator('#retry-stories').click();
+  await expect(page.locator('.story-run')).toHaveCount(2);
+  await expect(page.locator('.story-run').nth(1)).toContainText('未知（非零费用）');
+  await page.locator('.user-button').nth(1).click();
+  await expect(page.locator('.story-run')).toHaveCount(0);
+  await expect(page.locator('#story-status')).toContainText('暂无已登记故事');
+  expect(calls.stories.at(-1).searchParams.get('user')).toBe(users[1].user_id);
+});
+
+test('故事详情请求迟到不能恢复已切走用户的数据，会话过期清除故事', async ({ page }) => {
+  let release; let started;
+  const gate = new Promise(resolve => { release = resolve; });
+  const ready = new Promise(resolve => { started = resolve; });
+  let expired = false;
+  await fixtures(page, {
+    stories: route => expired ? route.fulfill({ status: 401, json: { error: 'unauthorized' } }) : route.fulfill({ json: { runs: [storyRun], next_cursor: null } }),
+    story: async route => { started(); await gate; return route.fulfill({ json: { result: storyResult } }).catch(() => {}); },
+  });
+  await login(page); await page.locator('#stories-view').click();
+  await page.getByRole('button', { name: '查看故事与四格提示词' }).click(); await ready;
+  await page.locator('#photos-view').click(); release();
+  await expect(page.locator('.saved-story')).toHaveCount(0);
+  expired = true; await page.locator('#stories-view').click();
+  await expect(page.locator('#login-screen')).toBeVisible();
+  await expect(page.locator('.story-run')).toHaveCount(0);
+});
+
+
+test('故事独立折叠、键盘切换和整批收起不会重复读取或丢失全文', async ({ page }) => {
+  const two = { ...storyResult, stories: [storyResult.stories[0], { ...storyResult.stories[0], story_id: '40000000-0000-4000-8000-000000000002', title: '第二个故事' }] };
+  const calls = await fixtures(page, {
+    stories: route => route.fulfill({ json: { runs: [{ ...storyRun, story_count: 2 }], next_cursor: null } }),
+    story: route => route.fulfill({ json: { status: 'succeeded', result: two } }),
+  });
+  await login(page); await page.locator('#stories-view').click();
+  const load = page.getByRole('button', { name: '查看故事与四格提示词' });
+  await expect(load).toHaveAttribute('aria-expanded', 'false'); await load.click();
+  const stories = page.locator('.saved-story'); await expect(stories).toHaveCount(2);
+  await expect(stories.nth(0)).not.toHaveAttribute('open'); await expect(stories.nth(1)).not.toHaveAttribute('open');
+  const first = stories.nth(0).locator('summary'); await first.focus(); await page.keyboard.press('Enter');
+  await expect(stories.nth(0)).toHaveAttribute('open', ''); await expect(stories.nth(1)).not.toHaveAttribute('open');
+  await expect(stories.nth(0).locator('.saved-story-body')).toContainText(two.stories[0].image_prompt);
+  await first.focus(); await page.keyboard.press('Space'); await expect(stories.nth(0)).not.toHaveAttribute('open');
+  await stories.nth(1).locator('summary').click(); await expect(stories.nth(1)).toHaveAttribute('open', '');
+  await page.getByRole('button', { name: '收起故事列表' }).click();
+  await expect(page.locator('.story-content')).toBeHidden();
+  const expand = page.getByRole('button', { name: '展开故事列表' }); await expect(expand).toHaveAttribute('aria-expanded', 'false'); await expand.click();
+  await expect(page.locator('.story-content')).toBeVisible(); await expect(stories.nth(1)).toHaveAttribute('open', '');
+  expect(calls.details).toHaveLength(1); expect(calls.external).toEqual([]);
 });

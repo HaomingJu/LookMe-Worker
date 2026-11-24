@@ -132,7 +132,7 @@ export async function run(args, fetchImpl = fetch) {
     data.client_request_ms = clientRequestMs;
     const output = JSON.stringify(data, null, 2) + '\n';
     if (fd !== undefined) { fs.writeFileSync(fd, output); fs.fsyncSync(fd); }
-    return options.out ? { saved_file: options.out, story_count: data.story_count, model: data.model, story_version: data.story_version, request_id: data.request_id, request_duration_ms: data.request_duration_ms ?? null, client_request_ms: clientRequestMs, model_timings: data.model_timings ?? null, usage: data.usage ?? {}, cost: data.cost ?? null, ...(data.coverage ? { coverage: data.coverage } : {}) } : data;
+    return options.out ? { saved_file: options.out, story_count: data.story_count, model: data.model, story_version: data.story_version, request_id: data.request_id, run_id: data.run_id ?? null, persisted: data.persisted === true, story_ids: data.stories.map(story => story.story_id), request_duration_ms: data.request_duration_ms ?? null, client_request_ms: clientRequestMs, model_timings: data.model_timings ?? null, usage: data.usage ?? {}, cost: data.cost ?? null, ...(data.coverage ? { coverage: data.coverage } : {}) } : data;
   } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

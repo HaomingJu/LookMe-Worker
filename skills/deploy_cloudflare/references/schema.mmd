@@ -74,6 +74,43 @@ erDiagram
         TEXT captured_at_source "nullable"
         INTEGER uploaded_at_ms "NOT NULL"
     }
+    stories {
+        TEXT story_id PK,UK "NOT NULL"
+        TEXT owner_id FK "NOT NULL"
+        TEXT run_id FK "NOT NULL"
+        INTEGER position "NOT NULL"
+        TEXT title "NOT NULL"
+        TEXT summary "NOT NULL"
+        TEXT image_prompt "NOT NULL"
+        TEXT panels_json "NOT NULL"
+        TEXT source_photo_ids_json "NOT NULL"
+        INTEGER created_at_ms "NOT NULL"
+    }
+    story_run_photos {
+        TEXT owner_id FK "NOT NULL"
+        TEXT run_id PK,FK "NOT NULL"
+        TEXT photo_id PK,FK "NOT NULL"
+        INTEGER position "NOT NULL"
+        TEXT summary_text "NOT NULL"
+    }
+    story_runs {
+        TEXT run_id PK,UK "NOT NULL"
+        TEXT owner_id FK "NOT NULL"
+        TEXT story_date "NOT NULL"
+        TEXT timezone "NOT NULL"
+        TEXT date_basis "NOT NULL"
+        TEXT story_version "NOT NULL"
+        TEXT analysis_version "NOT NULL"
+        TEXT model "NOT NULL"
+        TEXT input_sha256 "NOT NULL"
+        TEXT input_json "NOT NULL"
+        TEXT profile_json "NOT NULL"
+        TEXT status "NOT NULL"
+        TEXT response_json "nullable"
+        TEXT error_json "nullable"
+        INTEGER created_at_ms "NOT NULL"
+        INTEGER updated_at_ms "NOT NULL"
+    }
     user_tokens {
         TEXT token_id PK,UK "NOT NULL"
         TEXT user_id FK "NOT NULL"
@@ -92,4 +129,8 @@ erDiagram
     comic_jobs ||..o| job_dispatch : "job_id / DELETE CASCADE"
     photos ||..o{ photo_analyses : "photo_id / DELETE RESTRICT"
     photos ||..o{ photo_analysis_dispatch : "photo_id / DELETE RESTRICT"
+    story_runs ||..o{ stories : "owner_id, run_id / DELETE RESTRICT"
+    photos ||..o{ story_run_photos : "owner_id, photo_id / DELETE RESTRICT"
+    story_runs ||..o{ story_run_photos : "owner_id, run_id / DELETE RESTRICT"
+    users ||..o{ story_runs : "owner_id / DELETE RESTRICT"
     users ||..o{ user_tokens : "user_id / DELETE RESTRICT"

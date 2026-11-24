@@ -430,3 +430,66 @@ it('非请求模型阶段失败不冒称模型已调用、也不报告零收费'
   expect(body).toMatchObject({model_call_attempted:false,model:null,cost:null,request_duration_ms:expect.any(Number)});
   expect(ai).not.toHaveBeenCalled();
 });
+
+describe('故事持久化与漫画输入准备',()=>{
+  it('成功前原子保存批次、故事、四格、模型和计价快照；每次生成保留新批次',async()=>{
+    const id=await seed();
+    ai.mockImplementation(async(_m,input)=>completion(providerStory(JSON.parse(input.messages[1].content).photos,1)));
+    const first=await (await invoke(autoRequest())).json() as any;
+    expect(first).toMatchObject({persisted:true,run_id:first.request_id});
+    const saved=await db.prepare('SELECT * FROM story_runs WHERE run_id=? AND owner_id=?').bind(first.run_id,owner).first<any>();
+    expect(saved.status).toBe('succeeded');expect(JSON.parse(saved.response_json)).toEqual(first);
+    expect(JSON.parse(saved.profile_json).model).toBe(MODEL);
+    expect(JSON.parse(saved.input_json).photos).toHaveLength(1);
+    expect(saved.response_json).not.toContain(token);
+    const rows=(await db.prepare('SELECT * FROM stories WHERE owner_id=? AND run_id=?').bind(owner,first.run_id).all<any>()).results;
+    expect(rows).toHaveLength(1);expect(rows[0].story_id).toBe(first.stories[0].story_id);
+    expect(JSON.parse(rows[0].panels_json)).toHaveLength(4);
+    expect(JSON.parse(rows[0].source_photo_ids_json)).toEqual([id]);
+    expect(await db.prepare('SELECT summary_text FROM story_run_photos WHERE run_id=?').bind(first.run_id).first()).toMatchObject({summary_text:'公园中有树木与长椅。'});
+    const second=await (await invoke(autoRequest())).json() as any;
+    expect(second.run_id).not.toBe(first.run_id);expect(second.stories[0].story_id).not.toBe(first.stories[0].story_id);
+    expect((await db.prepare('SELECT count(*) n FROM story_runs WHERE owner_id=?').bind(owner).first<any>()).n).toBe(2);
+    expect((await db.prepare('PRAGMA foreign_key_check').all()).results).toEqual([]);
+  });
+  it('登记失败不调用模型，模型失败保留needs_review和费用诊断但不写故事',async()=>{
+    await seed();
+    const broken=new Proxy(db,{get(target,key){if(key==='batch')return async()=>{throw new Error('private db failure');};const value=(target as any)[key];return typeof value==='function'?value.bind(target):value;}});
+    const body=await (await invoke(autoRequest(),{DB:broken})).json() as any;
+    expect(body).toMatchObject({error:'story_registration_unconfirmed',model_call_attempted:false});expect(ai).not.toHaveBeenCalled();
+    ai.mockResolvedValueOnce(Response.json({errors:[{code:3036}]},{status:429}));
+    const failure=await (await invoke(autoRequest())).json() as any;
+    expect(failure.error).toBe('model_quota_exceeded');
+    const row=await db.prepare('SELECT status,error_json FROM story_runs WHERE run_id=?').bind(failure.run_id).first<any>();
+    expect(row.status).toBe('needs_review');expect(JSON.parse(row.error_json).error).toBe('model_quota_exceeded');
+    expect((await db.prepare('SELECT count(*) n FROM stories WHERE owner_id=?').bind(owner).first<any>()).n).toBe(0);
+  });
+  it('结果事务写入失败返回503，保留待核查批次且不自动重调模型',async()=>{
+    await seed();await seed({uploaded:START+1});
+    ai.mockImplementationOnce(async(_m,input)=>completion(providerStory(JSON.parse(input.messages[1].content).photos,2)));
+    // 第二个故事写入失败，验证第一个也回滚，不能只有半批成功。
+    await db.prepare("CREATE TRIGGER reject_story BEFORE INSERT ON stories WHEN NEW.position=1 BEGIN SELECT RAISE(ABORT,'test'); END").run();
+    try {
+      const response=await invoke(autoRequest());const body=await response.json() as any;
+      expect(response.status).toBe(503);expect(body).toMatchObject({error:'story_persistence_unconfirmed',model_call_attempted:true,automatic_retry:false,usage:{prompt_tokens:100}});
+      expect(await db.prepare('SELECT status,response_json FROM story_runs WHERE run_id=?').bind(body.run_id).first()).toEqual({status:'generating',response_json:null});
+      expect((await db.prepare('SELECT count(*) n FROM stories WHERE owner_id=?').bind(owner).first<any>()).n).toBe(0);
+      expect(ai).toHaveBeenCalledOnce();
+    }finally{await db.prepare('DROP TRIGGER reject_story').run();}
+  });
+  it('结果batch提交后响应丢失，仅查回确认，不重复推理或写入',async()=>{
+    await seed();ai.mockImplementationOnce(async(_m,input)=>completion(providerStory(JSON.parse(input.messages[1].content).photos,1)));
+    let batches=0;
+    const wrapped=new Proxy(db,{get(target,key){if(key==='batch')return async(statements:D1PreparedStatement[])=>{const result=await target.batch(statements);if(++batches===2)throw new Error('lost response');return result;};const value=(target as any)[key];return typeof value==='function'?value.bind(target):value;}});
+    const response=await invoke(autoRequest(),{DB:wrapped});expect(response.status).toBe(200);
+    const body=await response.json() as any;expect(body.persisted).toBe(true);expect(batches).toBe(2);expect(ai).toHaveBeenCalledOnce();
+    expect((await db.prepare('SELECT count(*) n FROM stories WHERE run_id=?').bind(body.run_id).first<any>()).n).toBe(1);
+  });
+  it('复合外键拒绝跨用户照片关联',async()=>{
+    const own=await seed();const other=await seed({owner:'another-owner'});
+    ai.mockImplementationOnce(async(_m,input)=>completion(providerStory(JSON.parse(input.messages[1].content).photos,1)));
+    const saved=await (await invoke(autoRequest())).json() as any;
+    await expect(db.prepare('INSERT INTO story_run_photos(owner_id,run_id,photo_id,position,summary_text) VALUES (?,?,?,?,?)').bind(owner,saved.run_id,other,20,'错误归属').run()).rejects.toThrow();
+    await expect(db.prepare('DELETE FROM photos WHERE photo_id=?').bind(own).run()).rejects.toThrow();
+  });
+});

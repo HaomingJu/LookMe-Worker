@@ -1,6 +1,10 @@
 # 每日故事 Worker
 
-独立的手动 HTTP Worker：从已有 `photos` / `photo_analyses` 读取某个用户一天的图片摘要，通过可选的原生 Workers AI 模型整理成**由AI自主决定数量的故事，每个故事包含四格分镜及生图提示词**，直接返回 JSON。只接受摘要文字，不读取 R2、不生成图片、不写 D1；不新建表、不改变现有上传/分析管道，没有 Queue 或 Cron。
+独立的手动 HTTP Worker：从已有 `photos` / `photo_analyses` 读取某个用户一天的图片摘要，通过可选的原生 Workers AI 模型整理成**由AI自主决定数量的故事，每个故事包含四格分镜及生图提示词**，通过D1事务保存批次与故事后返回JSON。只接受摘要文字，不读取R2、不生成图片；新增0005迁移，不改变现有上传/分析管道，没有Queue或Cron。
+
+## 本次新增：故事持久化（已迁移并部署）
+
+已于2026-11-23按顺序应用共用的 `0005_story_runs.sql` 迁移，并部署故事和调试Worker。本地story 173项、debug后端10项和浏览器18项通过，上传51项与图生文74项回归通过，共326项；类型检查和dry-run打包通过。线上story版本为 `e0761931-0be6-46f5-99e9-ea3458908bd9`，debug版本为 `4aa1f50e-573a-490e-9492-acdc3cf4b19b`。新版页面和无凭据鉴权检查通过，外键检查通过。部署后另经授权真实调用一次Qwen：14份摘要输入，AI自动生成3个故事，D1批次/故事/输入快照与返回JSON核对一致。尚未使用调试密码执行登录后的远端网站查询，网站链路已在本地贯通验证。未迁移的其他环境会在模型调用前拒绝登记。
 
 ## 当前版本与上线状态
 
@@ -90,7 +94,7 @@ npm run story -- \
   --out '/已有受限目录/2026-11-21.story.json'
 ```
 
-`--out` 以 0600 新建，拒绝覆盖；在请求前占用输出路径，失败可能留下空文件。不要把故事、摘要、凭据或输出文件提交 Git。JSON 包含用户的生活记录，默认没有云端故事副本。
+`--out` 以 0600 新建，拒绝覆盖；在请求前占用输出路径，失败可能留下空文件。不要把故事、摘要、凭据或输出文件提交 Git。JSON包含用户的生活记录；新代码成功返回前已保存到D1，`--out`只是额外的本地副本。历史版本生成的本地文件不会自动导入。
 
 ### 支持的模型
 
@@ -120,12 +124,12 @@ npm run story -- \
 成功 `200` 的主要字段：
 
 ```text
-request_id, date, timezone, date_basis, snapshot_at, day_complete
+request_id, run_id, persisted, created_at, date, timezone, date_basis, snapshot_at, day_complete
 photo_count, story_count（实际返回数）, story_count_mode（auto）, story_version, analysis_version, model
 input_sha256, provider_request_id, usage, model_timings, sources[], coverage
 daily_summary
 stories[]:
-  title, summary, source_photo_ids[], image_prompt
+  story_id, title, summary, source_photo_ids[], image_prompt
   panels[4]: panel(1–4), description, source_photo_ids[], image_prompt
 ```
 
@@ -193,7 +197,7 @@ v3 改用单一来源列表，避免模型维护两份重复名单：
 - `npm run deploy:preflight` 通过官方 Wrangler 认证上下文核对域名归属和 `domains/changeset`，遇到 DNS 冲突、移除、替换或未知返回结构即停止；该预览不修改 DNS，不直接通过管理 API 应用配置，也不输出 Token。直接 DNS 列表权限不足时不据此宣称 DNS 为空。
 - 首次 Worker 尚不存在时，域名预览会返回10090。先在 Wrangler 文件中保持 `routes: []`、关闭公开入口与生成，发布私有 Worker；随后将已确认域名及开关写回配置，再经上述预检发布。此次已完成该两阶段流程。换账号或首次域名选择需另行确认，不能复用旧账号的授权假设。
 - 修改超时、输出预算、提示词或其他模型参数必须追加故事版本并重新锁定，不能原地改写已发布 v1；延长等待还需同步核对脚本客户端超时。真实调用仍需单独授权，不因发布成功而自动重试。
-- 不把本 Worker 加入 `../scripts/pipeline.mjs deploy-dev`，不触碰已上线自动分析设置；当前无需新增迁移。
+- 不把本 Worker 加入 `../scripts/pipeline.mjs deploy-dev`，不触碰已上线自动分析设置；本次持久化需要新增0005迁移，不能仅部署代码。
 
 ## 本次耗时、Token 与费用（已部署）
 
@@ -204,7 +208,7 @@ v3 改用单一来源列表，避免模型维护两份重复名单：
 | 字段 | 含义 |
 |---|---|
 | `model` / `story_version` | 服务端实际选择的模型与固定配置版本 |
-| `request_duration_ms` | 服务端从进入handler到准备返回的耗时（含鉴权/查询/模型/校验，不含完整网络传输） |
+| `request_duration_ms` | 生成处理耗时（含鉴权/输入快照登记/模型/校验，截止成功结果事务落库前）；`duration_scope: before_result_persistence` 明确口径，不冒充含落库的总响应时间 |
 | `client_request_ms` | 本地脚本从发出请求到读完JSON的耗时，不含本地写文件；由脚本添加 |
 | `model_timings` | AI响应头等待、正文读取、模型调用总耗时与响应字节数 |
 | `usage` | 供应商返回的输入、输出、总tokens；如果提供，还保留缓存输入和reasoning tokens |
@@ -228,6 +232,39 @@ v3 改用单一来源列表，避免模型维护两份重复名单：
 - 其他429：`model_rate_limited`，未能确认计费原因，不引导用户盲目充值；普通403/5xx也不误报欠费。
 
 API错误含固定中文 `message`，脚本依据错误码输出中文提示、模型、耗时、用量、单价和估算。仅有异常文本、未知错误包裹或无明确计费信号时保留通用失败，不靠关键词猜欠费。上游正文读取限制16KiB/2秒，永不直接输出或记录可能包含秘密的错误正文。仍保留 `model_call_attempted`、`may_have_been_billed`，不承诺失败请求免费，也不自动重试。
+
+## D1持久化与后续worker-comic契约
+
+共用迁移 `worker-upload/migrations/0005_story_runs.sql` 新增三张表：
+
+| 表 | 内容 |
+|---|---|
+| `story_runs` | 一次生成批次。owner、故事日期/时区/时间口径、模型/版本、输入hash、输入JSON、完整profile快照、状态、成功响应或错误诊断JSON、时间 |
+| `story_run_photos` | 本次全部输入照片的真实UUID、顺序和摘要快照；复合owner外键防止跨用户引用 |
+| `stories` | 每个故事的稳定 `story_id`、owner、批次、顺序、标题、正文、整图提示词、四格JSON和来源照片JSON |
+
+调用流程：校验身份/摘要 → 用D1 batch登记 `generating` 批次和输入 → 单次调用模型 → 校验输出 → 用D1 batch原子写入全部故事并将批次改为 `succeeded` → 返回200及 `run_id` / `story_id` / `persisted: true`。故事正文、usage、cost价格快照、模型耗时、输入覆盖说明保留在成功response JSON，不根据以后更新的价格重新算旧批次。
+
+相同用户/日期再次手动生成会新增批次，旧故事不覆盖。`run_id`等于本次服务端request_id，不是客户端幂等键：断连后不要通过重发POST“恢复”。
+
+- 登记失败：503 `story_registration_unconfirmed`，模型尚未调用；若D1已提交但确认丢失，可能留下generating批次供核对。
+- 模型失败/超时/输出不合法：尽力登记 `needs_review`，保留错误码、用量及费用诊断，不写可供漫画使用的故事；若故障阻止状态更新，保留generating，不猜测已成功。
+- 模型成功但结果落库未确认：503 `story_persistence_unconfirmed`，附run_id，不自动重调。先按owner/run_id读取D1核查。batch提交后响应丢失时会只读查回；与本次完整结果一致才返回成功。事务失败不会留一半故事。
+- `generating` 长期停留不代表仍在运行，可能是进程中断或写入不确定；不提供自动重放或过期重调。
+- 调试站点按用户/上传日展示所有批次及错误状态，仅已保存的批次能展开故事。客户端自己测得的 `client_request_ms` 不在服务端已存结果中；网站只显示服务端可证实的耗时，缺失usage/费用显示未知。
+
+后续 `worker-comic` 应根据**已鉴权owner + story_id**关联stories和story_runs，并要求 `story_runs.status='succeeded'`。使用已存的 `image_prompt` / `panels_json`，不要重新生成文字，也不要从客户端信任任意owner或提示词。批次价格是一次故事生成的总估算，不能把该数额重复算成每个故事费用。本次仅准备数据契约，未实现或触发worker-comic。
+
+输入快照和故事均为私密数据；数据库没有Token明文，也不存模型原始未通过校验的正文。照片/用户/批次使用RESTRICT外键，不自动清理；未来删除需制定专门的关联清理流程。
+
+### 发布顺序（需要另行授权）
+
+1. 先本地检查、测试和dry-run；核对远端身份及已有表，按迁移规则只应用缺失迁移。
+2. 从上传项目通过Wrangler迁移共用D1：`npx wrangler d1 migrations apply lookme-dev --env dev --remote`。0005只建新表/索引，不导入历史故事、不调用模型。
+3. 单独发布story和debug，保持各自现有域名/密码；不需要重新发布上传/图生文管道。
+4. 用户再手动生成的新结果会保存；旧本地JSON不会自动出现，导入历史结果需另行授权并验证来源。
+
+本地验证覆盖：缺表/登记写失败不调用模型、成功批次与四格原子保存、结果写失败、提交后响应丢失查回、多次生成不覆盖、跨owner外键；并贯通真实本地HTTP脚本 → mock AI → D1 → debug鉴权读取，禁止公网模型。
 
 ## Cloudflare 付费方式
 
@@ -254,3 +291,9 @@ API错误含固定中文 `message`，脚本依据错误码输出中文提示、�
 - [添加付款方式](https://developers.cloudflare.com/billing/get-started/create-billing-profile/)
 
 历史v4完成过一次真实验收；新增v5/v5-gemma已部署并完成本地mock与线上路由/鉴权验收，尚未调用真实模型。模型输出的事实忠实度仍需人工检查，单次成功不代表所有输入都可靠，也不是性能SLA。进一步真实调用按明确请求执行，不自动重试。
+
+## 2026-11-23 持久化真实验收
+
+部署后单独获准的一次Qwen/v5请求返回HTTP200、`persisted: true`。14份摘要输入，AI自行选择3个故事；3条stories、14条story_run_photos及完整response_json均已从D1核对。分镜引用11张，其余3张通过coverage披露。端到端77.262秒，模型76.254秒；输入2693/输出1466 tokens，公开价估算0.00590305美元（非实际账单）。没有自动重试。
+
+在调试站登录后选择对应用户 → 故事 → **2026-11-21（上传日）** 即可查询；生成时间为2026-11-23，不能把生成日误用作故事筛选日期。验收只新增获准的故事记录，没有导入历史本地文件；本地结果与检查点保存在仓库外受限目录。

@@ -169,7 +169,64 @@ async function timeline(request: Request, env: Env, url: URL) {
   const photos = result.results.slice(0, f.limit);
   const last = photos.at(-1);
   const next = result.results.length > f.limit && last ? btoa(JSON.stringify({ scope, time: last.captured_at_ms, id: last.photo_id })) : null;
-  return cachedJSON(request, { photos, next_cursor: next, timezone: 'Asia/Shanghai', date_basis: 'captured_at_ms', story: { status: 'not_implemented', text: null } });
+  return cachedJSON(request, { photos, next_cursor: next, timezone: 'Asia/Shanghai', date_basis: 'captured_at_ms', story: { status: 'separate_endpoint', endpoint: '/api/stories' } });
+}
+// 故事按生成时指定的上传日分组，不沿用照片时间线的captured_at筛选。
+async function storyRuns(request: Request, env: Env, url: URL) {
+  parameters(url, ['user', 'date', 'cursor']);
+  const user = owner(url.searchParams.get('user'));
+  const date = url.searchParams.get('date') ?? '';
+  const timestamp = Date.parse(date + 'T00:00:00Z');
+  if (!/^20\d{2}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(timestamp) || new Date(timestamp).toISOString().slice(0, 10) !== date) throw new HttpError(400, 'invalid_date');
+  if (!await env.DB.prepare('SELECT user_id FROM users WHERE user_id=?').bind(user).first()) throw new HttpError(404, 'user_not_found');
+  let after: { time: number; id: string } | null = null;
+  const raw = url.searchParams.get('cursor');
+  if (raw !== null) {
+    try {
+      if (raw.length > 1024) throw new Error();
+      const parsed = JSON.parse(atob(raw));
+      if (parsed.user !== user || parsed.date !== date || !Number.isSafeInteger(parsed.time) || parsed.time < 0 || !UUID.test(parsed.id)) throw new Error();
+      after = { time: parsed.time, id: parsed.id };
+    } catch { throw new HttpError(400, 'invalid_cursor'); }
+  }
+  const result = await env.DB.prepare(`SELECT run_id,story_date,timezone,date_basis,story_version,analysis_version,model,status,created_at_ms,updated_at_ms,
+    json_extract(response_json,'$.story_count') AS story_count,
+    json_extract(response_json,'$.daily_summary') AS daily_summary,
+    json_extract(response_json,'$.snapshot_at') AS snapshot_at,
+    json_extract(response_json,'$.day_complete') AS day_complete,
+    json_extract(response_json,'$.provider_request_id') AS provider_request_id,
+    json_extract(response_json,'$.request_duration_ms') AS request_duration_ms,
+    json_extract(response_json,'$.usage') AS usage_json,
+    json_extract(response_json,'$.cost') AS cost_json,
+    json_extract(response_json,'$.model_timings') AS timings_json,
+    error_json FROM story_runs WHERE owner_id=? AND story_date=?
+    ${after ? 'AND (created_at_ms < ? OR (created_at_ms = ? AND run_id < ?))' : ''}
+    ORDER BY created_at_ms DESC,run_id DESC LIMIT 11`)
+    .bind(user, date, ...(after ? [after.time, after.time, after.id] : [])).all<Record<string, any>>();
+  const rows = result.results.slice(0, 10);
+  const runs = rows.map(row => {
+    const { usage_json, cost_json, timings_json, error_json, ...rest } = row;
+    const error = error_json ? JSON.parse(error_json) : null;
+    return { ...rest, usage: usage_json ? JSON.parse(usage_json) : error?.usage ?? {},
+      cost: cost_json ? JSON.parse(cost_json) : error?.cost ?? null,
+      model_timings: timings_json ? JSON.parse(timings_json) : error?.model_timings ?? null,
+      request_duration_ms: row.request_duration_ms ?? error?.request_duration_ms ?? null,
+      error_code: error?.error ?? null };
+  });
+  const last = rows.at(-1);
+  return cachedJSON(request, { runs, next_cursor: result.results.length > 10 && last ? btoa(JSON.stringify({ user, date, time: last.created_at_ms, id: last.run_id })) : null,
+    timezone: 'Asia/Shanghai', date_basis: 'uploaded_at_ms' });
+}
+async function storyDetail(request: Request, env: Env, url: URL) {
+  parameters(url, ['user', 'run_id']);
+  const user = owner(url.searchParams.get('user')), id = url.searchParams.get('run_id') ?? '';
+  if (!UUID.test(id)) throw new HttpError(400, 'invalid_run_id');
+  // 调试密码为管理员只读权限；仍用owner/run_id限定查询，避免选择用户串数据。
+  const row = await env.DB.prepare('SELECT status,response_json,error_json FROM story_runs WHERE owner_id=? AND run_id=?')
+    .bind(user, id).first<{status:string;response_json:string|null;error_json:string|null}>();
+  if (!row) throw new HttpError(404, 'story_not_found');
+  return cachedJSON(request, { run_id: id, status: row.status, result: row.response_json ? JSON.parse(row.response_json) : null,
+    error: row.error_json ? JSON.parse(row.error_json) : null });
 }
 async function photo(request: Request, env: Env, url: URL, id: string) {
   if (!UUID.test(id)) throw new HttpError(404, 'not_found');
@@ -202,6 +259,8 @@ async function route(request: Request, env: Env) {
   if (!await sessionValid(request, env.DEBUG_PASSWORD)) throw new HttpError(401, 'unauthorized');
   if (request.method !== 'GET') return new Response(null, { status: 405, headers: { Allow: 'GET' } });
   if (url.pathname === '/api/users') return users(request, env);
+  if (url.pathname === '/api/stories') return storyRuns(request, env, url);
+  if (url.pathname === '/api/story') return storyDetail(request, env, url);
   if (url.pathname === '/api/timeline') return timeline(request, env, url);
   const match = /^\/photo\/([^/]+)$/.exec(url.pathname);
   if (match) return photo(request, env, url, match[1]);

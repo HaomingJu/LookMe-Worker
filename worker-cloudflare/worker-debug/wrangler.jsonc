@@ -22,7 +22,8 @@
         {
           "binding": "DB",
           "database_name": "lookme-dev",
-          "database_id": "8ca73bf2-a8d9-4d17-a393-105a9f63622d"
+          "database_id": "8ca73bf2-a8d9-4d17-a393-105a9f63622d",
+          "migrations_dir": "../worker-upload/migrations"
         }
       ],
       "r2_buckets": [

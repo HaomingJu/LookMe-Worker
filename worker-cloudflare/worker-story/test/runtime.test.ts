@@ -8,11 +8,14 @@ import { createHash } from 'node:crypto';
 import { run } from '../scripts/story.mjs';
 it.each(['v2', 'v3', 'v4', 'v5', 'v5-gemma'])('真实本地HTTP %s：手动脚本 → workerd → D1摘要 → mock AI → 0600故事文件', async version => {
   const bundle = await build({ entryPoints: ['test/runtime-fixture.ts'], bundle: true, write: false, format: 'esm', platform: 'browser' });
-  const runtime = new Miniflare(convertV4MiniflareOptions({ modules: true, script: bundle.outputFiles[0].text, compatibilityDate: '2026-11-19',
-    d1Databases: ['DB'], outboundService: () => { throw new Error('测试禁止访问公网'); } }));
+  const debug = await build({ entryPoints: ['../worker-debug/src/index.ts'], bundle: true, write: false, format: 'esm', platform: 'browser', loader: { '.html': 'text', '.css': 'text', '.js': 'text' } });
+  const runtime = new Miniflare(convertV4MiniflareOptions({ workers: [
+    { name: 'story', modules: true, script: bundle.outputFiles[0].text, compatibilityDate: '2026-11-19', d1Databases: { DB: 'shared-story-test' }, outboundService: () => { throw new Error('测试禁止访问公网'); } },
+    { name: 'debug', modules: true, script: debug.outputFiles[0].text, compatibilityDate: '2026-11-19', d1Databases: { DB: 'shared-story-test' }, bindings: { DEBUG_PASSWORD: 'local-debug-test' }, outboundService: () => { throw new Error('测试禁止访问公网'); } },
+  ] }));
   const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'lookme-story-http-'));
   try {
-    const db = await runtime.getD1Database('DB');
+    const db = await runtime.getD1Database('DB', 'story');
     for (const file of (await fs.readdir('../worker-upload/migrations')).filter(f => f.endsWith('.sql')).sort()) {
       const sql = (await fs.readFile(`../worker-upload/migrations/${file}`, 'utf8')).replace(/--[^\n]*/g, '');
       for (const statement of sql.split(';').filter(x => x.trim())) await db.prepare(statement).run();
@@ -44,6 +47,18 @@ it.each(['v2', 'v3', 'v4', 'v5', 'v5-gemma'])('真实本地HTTP %s：手动脚�
     expect((await fs.stat(out)).mode & 0o777).toBe(0o600);
     expect(await fs.readFile(out, 'utf8')).not.toContain(token);
     expect((await db.prepare('SELECT COUNT(*) AS n FROM photo_analyses').first() as any).n).toBe(3);
+    expect(saved.persisted).toBe(true); expect(saved.run_id).toBe(saved.request_id);
+    const debugWorker = await runtime.getWorker('debug');
+    const login = await debugWorker.fetch('https://localhost/api/login', { method: 'POST', headers: { Origin: 'https://localhost', 'Content-Type': 'application/json' }, body: JSON.stringify({ password: 'local-debug-test' }) });
+    expect(login.status).toBe(200);
+    const cookie = login.headers.get('Set-Cookie')!.split(';')[0];
+    const list = await debugWorker.fetch('https://localhost/api/stories?user=local-user&date=2026-11-21', { headers: { Cookie: cookie } });
+    const listing = await list.json() as any;
+    expect(listing.runs).toHaveLength(1); expect(listing.runs[0]).toMatchObject({ run_id: saved.run_id, model, status: 'succeeded', story_count: count });
+    const detail = await debugWorker.fetch(`https://localhost/api/story?user=local-user&run_id=${saved.run_id}`, { headers: { Cookie: cookie } });
+    const { client_request_ms, ...serverSaved } = saved;
+    expect(typeof client_request_ms).toBe('number');
+    expect((await detail.json() as any).result).toEqual(serverSaved);
     expect((await db.prepare('PRAGMA foreign_key_check').all()).results).toEqual([]);
   } finally { await runtime.dispose(); await fs.rm(folder, { recursive: true, force: true }); }
 }, 30000);

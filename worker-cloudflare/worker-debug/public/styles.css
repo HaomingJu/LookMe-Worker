@@ -125,3 +125,21 @@ dialog p { font: 11px var(--mono); padding-top: 10px; text-align: center; }
   .filter-bar[data-view="stories"] > .zone-note { grid-column: 1/-1; }
   .photo-grid { gap: 12px; }
 }
+
+/* 故事结果按批次展示；长提示词和UUID在手机宽度也可换行。 */
+.story-run { margin: 16px 0; padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); min-width: 0; }
+.story-run h3 { font-size: 15px; margin-bottom: 12px; }
+.story-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; margin: 10px 0; }
+.story-metadata { grid-template-columns: 110px minmax(0, 1fr); margin-bottom: 16px; }
+.story-panels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.story-panel-item { border: 1px solid var(--line); padding: 12px; border-radius: 6px; }
+.saved-story { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 16px; }
+.story-toggle { cursor: pointer; padding: 8px 0; overflow-wrap: anywhere; }
+.story-toggle:focus-visible { outline: 2px solid currentColor; outline-offset: 4px; border-radius: 4px; }
+.story-title { font-size: 17px; font-weight: 600; }
+.story-toggle-hint { margin-left: 12px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.story-toggle-hint::after { content: '展开详情'; }
+.saved-story[open] > .story-toggle .story-toggle-hint::after { content: '收起详情'; }
+.saved-story-body { padding-top: 12px; }
+.story-run h5 { font-size: 13px; }
+@media (max-width: 700px) { .story-panels { grid-template-columns: 1fr; } .story-metadata { grid-template-columns: 90px minmax(0, 1fr); } }

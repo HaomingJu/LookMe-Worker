@@ -5,6 +5,7 @@ import { SelectionError } from '../config/selection.mjs';
 import { dayBounds, summaries } from './input';
 import { generate } from './model';
 import { coverageOf, providerPhotos } from './references';
+import { beginRun, finishRun, recordFailure, type SavedResponse } from './store';
 import { HttpError, type Env } from './types';
 
 const json = (data: unknown, status: number, headers: Record<string, string> = {}) => Response.json(data, {
@@ -43,6 +44,9 @@ export function createWorker(clock = Date.now) {
       let code = 'ok';
       let selectedModel: string | null = null;
       let selectedVersion: string | null = null;
+      let runOwner: string | null = null;
+      let runRegistered = false;
+      let generationUsage: Usage = {};
       try {
         if (new URL(request.url).pathname !== '/stories') return json({ error: 'not_found' }, 404);
         if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405, { Allow: 'POST' });
@@ -69,23 +73,39 @@ export function createWorker(clock = Date.now) {
           photos: providerPhotos(photos, profile) });
         if (new TextEncoder().encode(input).byteLength > profile.max_input_bytes) throw new HttpError(413, 'summaries_too_large', { limit_bytes: profile.max_input_bytes });
         const inputHash = await sha256(input);
+        runOwner = owner;
+        // 缺迁移/写入失败时在产生模型费用之前停止。
+        try { await beginRun(env.DB, requestId, owner, day.date, version, profile, inputHash, input, photos, now); }
+        catch { throw new HttpError(503, 'story_registration_unconfirmed', { run_id: requestId }); }
+        runRegistered = true;
         attempted = true;
         const result = await generate(env.AI, profile, input, count, photos, { requestId, storyVersion: version });
-        return json({ request_id: requestId, date: day.date, timezone: profile.timezone, date_basis: profile.date_basis,
+        generationUsage = result.usage;
+        const saved: SavedResponse = { run_id: requestId, persisted: true, created_at: new Date(now).toISOString(), request_id: requestId, date: day.date, timezone: profile.timezone, date_basis: profile.date_basis,
           snapshot_at: new Date(now).toISOString(), day_complete: now >= day.end, photo_count: photos.length,
           story_count: result.stories.length, ...(autoCount ? { story_count_mode: 'auto' } : {}), story_version: version, analysis_version: profile.analysis_version, model: profile.model,
           input_sha256: inputHash, sources: photos.map(({ summary: _summary, ...source }) => source), ...result,
-          request_duration_ms: Date.now() - started, cost: costEstimate(profile.model, result.usage),
-          ...(profile.source_coverage === 'representative_panels' ? { coverage: coverageOf(result, photos) } : {}) }, 200);
+          request_duration_ms: Date.now() - started, duration_scope: 'before_result_persistence', cost: costEstimate(profile.model, result.usage),
+          ...(profile.source_coverage === 'representative_panels' ? { coverage: coverageOf(result, photos) } : {}),
+          stories: result.stories.map(story => ({ ...story, story_id: crypto.randomUUID() })),
+        };
+        try { await finishRun(env.DB, owner, saved, Date.now()); }
+        catch { throw new HttpError(503, 'story_persistence_unconfirmed', { run_id: requestId, usage: result.usage, model_timings: result.model_timings, provider_request_id: result.provider_request_id }); }
+        return json(saved, 200);
       } catch (error) {
         const failure = error instanceof HttpError ? error : error instanceof SelectionError ? new HttpError(400, error.code)
           : new HttpError(503, attempted ? 'failed_after_model_call' : 'service_unavailable');
         code = failure.code;
-        return json({ error: code, request_id: requestId, ...failure.details, model_call_attempted: attempted,
+        const errorBody = { error: code, request_id: requestId, ...failure.details, model_call_attempted: attempted,
           model: selectedModel, story_version: selectedVersion, request_duration_ms: Date.now() - started,
-          usage: (failure.details.usage as Usage | undefined) ?? {},
-          cost: selectedModel ? costEstimate(selectedModel, (failure.details.usage as Usage | undefined) ?? {}) : null,
-          ...(attempted ? { may_have_been_billed: true, automatic_retry: false } : {}) }, failure.status);
+          usage: (failure.details.usage as Usage | undefined) ?? generationUsage,
+          cost: selectedModel ? costEstimate(selectedModel, (failure.details.usage as Usage | undefined) ?? generationUsage) : null,
+          ...(attempted ? { may_have_been_billed: true, automatic_retry: false, run_id: requestId } : {}) };
+        if (runRegistered && runOwner && code !== 'story_persistence_unconfirmed') {
+          try { await recordFailure(env.DB, runOwner, requestId, errorBody, Date.now()); }
+          catch { /* 已登记的generating批次保留供人工核查，禁止自动重试。 */ }
+        }
+        return json(errorBody, failure.status);
       } finally {
         // 仅技术元数据；不记录 Token、用户摘要、故事正文、提示词或底层异常。
         console.info(JSON.stringify({ event: 'story_request', request_id: requestId, code, model_call_attempted: attempted, wall_ms: Date.now() - started }));

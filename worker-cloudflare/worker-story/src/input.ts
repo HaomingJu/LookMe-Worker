@@ -6,7 +6,7 @@ export function dayBounds(date: unknown, now: number): { start: number; end: num
   if (typeof date !== 'string' || !/^20\d{2}-\d{2}-\d{2}$/.test(date)) throw new HttpError(400, 'invalid_date');
   const calendar = Date.parse(date + 'T00:00:00Z');
   if (!Number.isFinite(calendar) || new Date(calendar).toISOString().slice(0, 10) !== date) throw new HttpError(400, 'invalid_date');
-  // 本版按现有调试页的北京时间上传日；2000—2099 年不涉及中国历史夏令时。
+  // 故事版本按北京时间上传日（照片调试时间线另按拍摄日）；2000—2099 年不涉及中国历史夏令时。
   const start = calendar - 8 * 3600000;
   if (start > now) throw new HttpError(400, 'future_date');
   return { date, start, end: start + 86400000 };

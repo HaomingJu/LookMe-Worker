@@ -30,7 +30,7 @@
     <main class="main-content">
       <form id="filters" class="filter-bar" aria-label="按拍摄时间筛选">
         <div class="field date-field">
-          <label for="date">拍摄日期</label>
+          <label id="date-label" for="date">拍摄日期</label>
           <div class="date-controls">
             <button id="previous-day" type="button" class="square" aria-label="前一天">‹</button>
             <input id="date" type="date" min="0001-01-01" max="9998-12-31" required>
@@ -59,7 +59,10 @@
       </section>
       <section id="stories-panel" class="story-panel" aria-labelledby="stories-title" hidden>
         <div class="section-heading"><h2 id="stories-title">故事</h2></div>
-        <p id="story-status" class="empty-state muted" role="status"></p>
+        <p id="story-status" class="muted" role="status"></p>
+        <div id="story-list" aria-label="故事生成批次"></div>
+        <div class="pager"><button id="more-stories" class="secondary" type="button" hidden>加载更多批次</button>
+        <button id="retry-stories" class="secondary" type="button" hidden>重试故事查询</button></div>
       </section>
     </main>
   </div>

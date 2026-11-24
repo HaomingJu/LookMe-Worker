@@ -82,8 +82,8 @@ npm run build             # wrangler deploy --env dev --dry-run，不上线
 
 ## 故事与调试 Worker
 
-- `worker-cloudflare/worker-story/` 使用用户 Token 手动调用 `POST /stories`，只读指定用户当天摘要，不读 R2、不写 D1、不使用 Cron/Queue；故事自动数量、模型选择、版本锁、费用估算和错误诊断见该目录 README。当前新版本通过本地 mock 验证，不从历史 v4 验收推断新模型真实可用性。
-- `worker-cloudflare/worker-debug/` 提供受密码保护的只读照片调试页；单独配置与发布，不与上传自动分析管道混合部署。
+- `worker-cloudflare/worker-story/` 使用用户 Token 手动调用 `POST /stories`，读取指定用户当天摘要，不读 R2、不使用 Cron/Queue；0005迁移后先登记生成批次，模型成功且结果事务保存后返回JSON，故事有稳定story_id供后续漫画引用；故事自动数量、模型选择、版本锁、费用估算和错误诊断见该目录 README。当前新版本通过本地 mock 验证，不从历史 v4 验收推断新模型真实可用性。
+- `worker-cloudflare/worker-debug/` 提供受密码保护的只读照片/故事调试页，故事按上传日读取D1持久化批次并显示模型、耗时、用量和费用估算；单独配置与发布，不与上传自动分析管道混合部署。
 - 各目录有自己的 `package.json`；从仓库根目录运行 npm 命令时使用 `npm --prefix worker-cloudflare/<项目目录> ...`，避免根目录 ENOENT。故事结果、秘密文件、Wrangler 缓存不提交 Git。
 
 ## 本地身份与管理工具
@@ -110,6 +110,7 @@ CLI 必须显式选择 `--local` 或 `--remote`；后者固定 `dev`。远端 SQ
 - `0002_user_tokens.sql`：用户和 Token 哈希表，保留历史照片/任务 owner 并补建用户，不自动签发 Token。旧业务表未重建，因此 owner 尚无 users 外键；新上传通过鉴权确保有效用户。
 - `0003_photo_analyses.sql`：以 `(photo_id, analysis_version)` 主键独立保存分析状态和文字结果；外键引用照片且禁止删除被引用照片，约束 lease、调用标记与终态。
 - `0004_photo_analysis_dispatch.sql`：上传事务Outbox，只新建表/索引，不回填历史照片；原子领取、租约、持久退避、投递标记。Queue接收不等于分析成功。
+- `0005_story_runs.sql`：故事生成批次、输入照片/摘要快照、独立story_id及四格JSON；模型前登记、成功事务落库，失败不自动重调。2026-11-23已获准应用到dev并发布story/debug；后续迁移/发布仍须另行授权，之后另经授权完成一次Qwen/v5真实生成并验证D1持久化；不据此授权后续模型调用。
 
 `skills/deploy_cloudflare/references/schema.sql` 是当前完整结构快照，**不是应覆盖到 0001 的迁移文件**。修改数据库需新增版本化迁移，并同步完整快照。从仓库根目录重新生成可视化：
 

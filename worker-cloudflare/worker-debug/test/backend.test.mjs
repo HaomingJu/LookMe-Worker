@@ -89,6 +89,9 @@ describe('拍摄时间筛选：本地真实 D1/R2', { concurrency: false }, () =
   }, { timeout: 30000 });
 
   beforeEach(async () => {
+    await db.prepare('DELETE FROM stories').run();
+    await db.prepare('DELETE FROM story_run_photos').run();
+    await db.prepare('DELETE FROM story_runs').run();
     await db.prepare('DELETE FROM photos').run();
     await db.prepare('DELETE FROM users').run();
     for (const [index, user] of [OWNER, OTHER_OWNER, EMPTY_OWNER].entries()) {
@@ -231,6 +234,43 @@ describe('拍摄时间筛选：本地真实 D1/R2', { concurrency: false }, () =
     assert.equal(emptyOwner.undated_photo_count, 0);
   });
 
+  async function seedRun(number, user=OWNER, status='succeeded') {
+    const runId=`30000000-0000-4000-8000-${String(number).padStart(12,'0')}`;
+    const result={run_id:runId,story_count:1,daily_summary:'合成故事摘要',model:'local-model',story_version:'v5',
+      request_duration_ms:1234,model_timings:{total_ms:1000},usage:{prompt_tokens:10,completion_tokens:20},
+      cost:{estimated_usd:0.0001,currency:'USD',is_estimate:true,pricing:{input:0.45,output:3.2,source:'https://developers.cloudflare.com/'}},
+      stories:[{story_id:id(number),title:'合成故事',summary:'合成文案',image_prompt:'合成提示词',source_photo_ids:[],panels:[]}]};
+    await db.prepare(`INSERT INTO story_runs(run_id,owner_id,story_date,timezone,date_basis,story_version,analysis_version,model,input_sha256,input_json,profile_json,status,response_json,created_at_ms,updated_at_ms)
+      VALUES (?,?,'2026-11-21','Asia/Shanghai','uploaded_at_ms','v5','v2','local-model',?,'{}','{}',?,?,?,?)`)
+      .bind(runId,user,'f'.repeat(64),status,status==='succeeded'?JSON.stringify(result):null,uploadedAt('12:00:00'),uploadedAt('12:00:00')).run();
+    return {runId,result};
+  }
+  it('故事查询按上传日隔离用户、游标分页，不返回私密输入快照',async()=>{
+    for(let i=1;i<=12;i++)await seedRun(i);
+    await seedRun(20,OTHER_OWNER);
+    const query=`/api/stories?user=${OWNER}&date=${uploadDay}`;
+    const first=await fetchJSON(query);assert.equal(first.response.status,200);assert.equal(first.body.runs.length,10);
+    assert.equal(first.body.date_basis,'uploaded_at_ms');assert.equal(first.body.runs[0].model,'local-model');
+    assert.equal(first.body.runs[0].cost.estimated_usd,0.0001);assert.equal(first.body.runs[0].input_json,undefined);
+    const second=await fetchJSON(query+'&cursor='+encodeURIComponent(first.body.next_cursor));
+    assert.equal(second.body.runs.length,2);assert.equal(second.body.next_cursor,null);
+    assert.equal(new Set([...first.body.runs,...second.body.runs].map(r=>r.run_id)).size,12);
+    const wrong=await fetchJSON(`/api/stories?user=${OTHER_OWNER}&date=${uploadDay}&cursor=${encodeURIComponent(first.body.next_cursor)}`);assert.equal(wrong.response.status,400);
+    assert.equal((await fetchJSON(`/api/stories?user=${OWNER}&date=${capturedDay}`)).body.runs.length,0);
+  });
+  it('故事详情保持鉴权和owner约束，支持ETag，未完成批次不伪装成功',async()=>{
+    const {runId,result}=await seedRun(1);
+    const url=`/api/story?user=${OWNER}&run_id=${runId}`;
+    assert.equal((await fetchJSON(url,false)).response.status,401);
+    assert.equal((await fetchJSON(`/api/stories?user=${OWNER}&date=${uploadDay}`,false)).response.status,401);
+    assert.equal((await fetchJSON(`/api/story?user=${OTHER_OWNER}&run_id=${runId}`)).response.status,404);
+    const detail=await fetchJSON(url);assert.deepEqual(detail.body.result,result);
+    const cached=await mf.dispatchFetch(BASE_URL+url,{headers:{Cookie:session,'If-None-Match':detail.response.headers.get('ETag')}});assert.equal(cached.status,304);
+    const pending=await seedRun(2,OWNER,'generating');
+    assert.equal((await fetchJSON(`/api/story?user=${OWNER}&run_id=${pending.runId}`)).body.result,null);
+    assert.equal((await fetchJSON(`/api/stories?user=${OWNER}&date=2026-02-30`)).response.status,400);
+    assert.equal((await fetchJSON(`/api/story?user=${OWNER}&run_id=bad`)).response.status,400);
+  });
   it('拍摄时间改动不绕过现有登录保护', async () => {
     await addPhoto(22, capturedAt('08:00:00'));
     for (const route of ['/api/users', `/api/timeline?user=${OWNER}&date=${capturedDay}`, `/photo/${id(22)}`]) {
