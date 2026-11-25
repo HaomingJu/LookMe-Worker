@@ -1,4 +1,4 @@
-import { profileVersion, specs, uuid, width, height } from '../config/models.mjs';
+import { flareProfileVersion, profileVersion, specs, uuid, width, height } from '../config/models.mjs';
 import { ComicError, sha256, type Env } from './common';
 import type { Model, Photo, Raster, Ref } from './render';
 
@@ -83,7 +83,7 @@ export async function claim(db: D1Database, owner: string, id: string, story: st
   const result = await db.prepare(`INSERT INTO comic_runs(owner_id,run_id,story_id,model,profile_version,profile_json,
       request_sha256,input_json,status,created_at_ms,updated_at_ms)
       VALUES (?,?,?,?,?,?,?,?,'generating',?,?) ON CONFLICT(owner_id,run_id) DO NOTHING`)
-    .bind(owner, id, story, model, profileVersion, JSON.stringify({ ...specs[model], width, height }), hash,
+    .bind(owner, id, story, model, specs[model].adapter === 'workers-ai-flare' ? flareProfileVersion : profileVersion, JSON.stringify({ ...specs[model], width, height }), hash,
       JSON.stringify({ prompt, refs: refs.map(({blob: _, ...ref}) => ref) }), now, now).run();
   if (!result.success) throw new ComicError(503, 'comic_registration_unconfirmed');
   return result.meta.changes === 1;

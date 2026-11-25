@@ -78,6 +78,7 @@ describe('manual runtime / 手动运行', () => {
       const result = await run(['generate',...cli(),'--story-id',story,'--model',model,'--confirm-model-call'],{notice:()=>{}});
       expect(result).toMatchObject({model,story_id:story,status:'succeeded',reference_photo_ids:ids.slice(0,3)});
       resultIds.push(result.run_id);
+      expect(result.profile_version).toBe(model === models[2] ? 'comic-v2-flare-binding' : 'comic-v1');
       expect(result.image).toMatchObject({width:1024,height:1536,mime_type:'image/png'});
     }
     expect(new Set(resultIds).size).toBe(3);
@@ -128,7 +129,7 @@ describe('manual runtime / 手动运行', () => {
     expect((await generate({},null)).status).toBe(401);
     expect((await generate({},tokens.c)).status).toBe(403);
     expect(await getJson(await generate({},tokens.a,'disabled'))).toMatchObject({code:503,body:{error:'comic_generation_disabled',model_call_attempted:false}});
-    expect(await getJson(await generate({model:models[2]},tokens.a,'flare-disabled'))).toMatchObject({code:503,body:{error:'flare_gateway_unavailable',model_call_attempted:false}});
+    expect(await getJson(await generate({model:models[2]},tokens.a,'flare-disabled'))).toMatchObject({code:503,body:{error:'flare_disabled',model_call_attempted:false}});
   });
 
   it('can allow all authenticated dev users without exposing another owner’s stories', async () => {
@@ -157,6 +158,23 @@ describe('manual runtime / 手动运行', () => {
       });
       expect(await getJson(response)).toMatchObject({code:503,body:{model_call_attempted:false,may_have_been_billed:false}});
     } finally { await standalone.dispose(); }
+  });
+
+  it.each([
+    ['flare-external','invalid_model_asset_url'], ['flare-credential-url','invalid_model_asset_url'],
+    ['flare-r2-other-bucket','invalid_model_asset_url'], ['flare-redirect','model_asset_download_failed'], ['flare-oversize','model_asset_download_failed'],
+    ['flare-corrupt','invalid_model_image'], ['flare-result-incomplete','invalid_model_response'],
+  ])('fails closed for %s and retains a non-retryable run', async (fault, error) => {
+    const run_id = randomUUID(), model = models[2];
+    expect(await getJson(await generate({run_id,model},tokens.a,fault))).toMatchObject({
+      code:502,body:{error,model_call_attempted:true,may_have_been_billed:true,automatic_retry:false}});
+    expect(await getJson(await generate({run_id,model}))).toMatchObject({
+      code:200,body:{status:'needs_review',model_call_attempted:false,image:null,replayed:true}});
+  });
+
+  it.each(['flare-r2', 'flare-r2-signed', 'flare-inline'])('persists a valid Flare asset with %s', async mode => {
+    expect(await getJson(await generate({model:models[2]},tokens.a,mode))).toMatchObject({
+      code:201,body:{status:'succeeded',image:{mime_type:'image/png',width:1024,height:1536}}});
   });
 
   it.each([['invalid',502,'invalid_model_image'],['timeout',504,'model_timeout'],['storage',503,'comic_persistence_unconfirmed']])(

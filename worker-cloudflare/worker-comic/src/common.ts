@@ -8,13 +8,10 @@ export interface Env {
   COMIC_ALLOW_ALL_AUTHENTICATED_USERS?: boolean;
   COMIC_GENERATOR_OWNER_IDS?: string;
   COMIC_FLARE_ENABLED?: boolean;
-  COMIC_GATEWAY_ACCOUNT_ID?: string;
-  COMIC_GATEWAY_ID?: string;
-  CF_AIG_TOKEN?: string;
 }
 
 export class ComicError extends Error {
-  constructor(readonly status: number, readonly code: string) { super(code); }
+  constructor(readonly status: number, readonly code: string, readonly assetOrigin?: string) { super(code); }
 }
 export const noCache = { 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' };
 export const reply = (body: unknown, status = 200, headers: HeadersInit = {}) =>

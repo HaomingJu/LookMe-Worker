@@ -1,6 +1,6 @@
 # LookMe Comic Worker / LookMe 漫画 Worker
 
-**Status / 状态:** deployed to dev at https://comic.fudaixuexue.eu.cc. No live inference yet. / 已部署到上述 dev 域名，尚未验收真实生图。
+**Status / 状态:** deployed to dev at https://comic.fudaixuexue.eu.cc. Flare live output is not yet verified. / 已部署到上述 dev 域名，Flare 真实成图尚未验收。
 
 ## Scope / 功能边界
 
@@ -12,13 +12,13 @@ This independent HTTP Worker is entered only through a manual command. It reads 
 | --- | --- | --- |
 | `@cf/black-forest-labs/flux-2-klein-9b` | Default, first quality baseline / 默认、首选质量基线 | Workers AI multipart, ≤500px reference side, fixed 4 steps / multipart，参考图长边 ≤500px，固定4步 |
 | `@cf/black-forest-labs/flux-2-klein-4b` | Fast draft / 快速预览 | Same input protocol as 9B / 输入协议与9B相同 |
-| `openai/gpt-image-2.6-flare` | Quality comparison / 质量对照 | Cloudflare AI Gateway OpenAI-native image edits, medium quality PNG, ≤1024px reference side / Gateway 的 OpenAI 原生编辑接口，medium PNG，参考图长边 ≤1024px |
+| `openai/gpt-image-2.6-flare` | Quality comparison / 质量对照 | Workers AI binding, JPEG data URLs, medium quality PNG, ≤1024px reference side / Workers AI binding，JPEG data URL 输入，medium PNG，参考图长边 ≤1024px |
 
-The Worker verifies original R2 byte count, SHA-256 and JPEG dimensions against D1 before resizing through the Images binding. Only processed JPEGs are submitted; pre-scan JPEG metadata such as EXIF/GPS and comments is stripped. No public photo URL, no VPS. Flare uses the provider-native Gateway endpoint and inline base64 results, not a unified endpoint that returns an image URL. It rejects unexpected output instead of fetching URLs supplied by a model. The Gateway request disables log collection, payload logging, and caching, and sets one attempt. Verify the dedicated Gateway settings and its billing/ZDR terms separately before sending any personal photo. An attached Cloudflare card is not necessarily a funded Unified Billing balance.
+The Worker checks original R2 bytes, SHA-256 and dimensions against D1, then resizes through the Images binding and strips JPEG EXIF/GPS and comments. All three models use the AI binding. Flare submits JPEG data URLs and downloads the completed response's asset server-side. It accepts bounded inline PNG/JPEG or HTTPS assets from Cloudflare's AI image namespace and canonical R2 delivery endpoints, with no credentials or redirects, an 8 MiB cap and matching PNG/JPEG type and dimensions. The result goes to private R2; the provider asset URL is never logged, stored, or returned to the client. If Cloudflare delivers from a different host, verify it using synthetic input before changing the allowlist. Flare draws from Unified Billing credits and does not require a dedicated HTTP Gateway token. Review Cloudflare and the provider's retention terms before sending private photos; not logging request payloads in this Worker does not imply zero retention.
 
-Worker 先用 D1 核对私有 R2 原图的字节数、SHA-256 和 JPEG 尺寸，再通过 Images binding 缩图。只提交处理后的 JPEG，并去掉扫描数据之前的 EXIF/GPS 等元数据和注释；不公开照片，不经过 VPS。Flare 走 Gateway 的供应商原生接口并读取内联 base64，不走返回图片 URL 的统一接口；遇到异常输出不会去访问模型返回的 URL。Gateway 请求关闭日志收集、正文日志和缓存，并限制为一次尝试。发送私人照片前仍须独立核对专用 Gateway 的配置、计费与零数据留存条件；Cloudflare 已绑卡不等于统一计费余额已充值。
+Worker 先用 D1 核对私有 R2 原图的字节数、SHA-256 和尺寸，再通过 Images binding 缩图并移除 JPEG 的 EXIF/GPS 与注释。三个模型都用 AI binding。Flare 传入 JPEG data URL，Worker 把完成响应中的成图下载到私有 R2。只接受有限大小的内联 PNG/JPEG 或 Cloudflare AI 图片域与标准 R2 地址上的 HTTPS 下载，不发送凭据、不跟随重定向，最多 8 MiB，并校验 PNG/JPEG 类型及尺寸。供应商 URL 不记日志、不入库、不返回客户端。若 Cloudflare 返回其他域名，先用合成图核实再调整白名单。Flare 使用统一计费余额，不需要单独的 HTTP Gateway 令牌。提交私人照片前请核对 Cloudflare 和供应商的留存条件；本 Worker 不记录请求正文不等于供应商零留存。
 
-References / 参考文档：[Klein 9B](https://developers.cloudflare.com/changelog/post/2026-01-28-flux-2-klein-9b-workers-ai/), [Klein 4B](https://developers.cloudflare.com/changelog/post/2026-01-15-flux-2-klein-4b-workers-ai/), [Cloudflare Images binding](https://developers.cloudflare.com/images/optimization/binding/), [Gateway OpenAI provider](https://developers.cloudflare.com/ai-gateway/usage/providers/openai/), [OpenAI Images Edits](https://developers.openai.com/api/reference/resources/images/methods/edit).
+References / 参考文档：[Klein 9B](https://developers.cloudflare.com/changelog/post/2026-01-28-flux-2-klein-9b-workers-ai/), [Klein 4B](https://developers.cloudflare.com/changelog/post/2026-01-15-flux-2-klein-4b-workers-ai/), [Cloudflare Images binding](https://developers.cloudflare.com/images/optimization/binding/), [Flare model / 模型](https://developers.cloudflare.com/ai/models/openai/gpt-image-2.6-flare/), [Unified Billing / 统一计费](https://developers.cloudflare.com/ai-gateway/features/unified-billing/).
 
 ## Local command / 本地命令
 
@@ -74,10 +74,10 @@ Tests run the CLI through local HTTP/workerd with real temporary D1 and R2, mock
 
 ## Dev deployment prerequisites / Dev 部署前置条件
 
-**Future deployments and account changes require approval / 后续部署与账号更改需授权。** Configure a verified independent HTTP route in `env.dev.routes`; the dev config binds the verified custom domain and enables Klein generation for every valid, non-revoked LookMe Token on an active account in dev. Each account can only use its own story and image records. Flare remains disabled. The dev-only `COMIC_ALLOW_ALL_AUTHENTICATED_USERS` flag grants this access. Omit it or set it to false to fall back to `COMIC_GENERATOR_OWNER_IDS` (empty = nobody). Before any new deployment, verify the private R2 buckets/Images binding, and use Wrangler to apply the shared migration to the intended dev D1 before deployment. For Flare, fill `COMIC_GATEWAY_ID`, use Wrangler to set the `CF_AIG_TOKEN` secret scoped to the approved authenticated Gateway, independently verify log/retry and billing settings, then enable `COMIC_FLARE_ENABLED`. A separate approved manual command is needed for any live smoke test; use a synthetic story and photos first.
+**Future deployments and account changes require approval / 后续部署与账号更改需授权。** Verify the existing dev domain, private buckets and shared D1 migration before deploying. In dev, `COMIC_ALLOW_ALL_AUTHENTICATED_USERS` lets active users with valid tokens generate only from their own stories; disable it to use `COMIC_GENERATOR_OWNER_IDS` (empty means nobody). `COMIC_FLARE_ENABLED` is a Boolean dev switch. No `COMIC_GATEWAY_ID` or `CF_AIG_TOKEN` is read by this version. An old failed or uncertain run is not resubmitted on the new adapter. A live inference check requires separate authorization; prefer synthetic inputs.
 
-在 `env.dev.routes` 中配置并核对独立 HTTP 路由。当前 dev 配置已绑定核验过的域名，调试阶段允许所有有效、未撤销且所属用户未停用的 LookMe Token 生成 Klein 漫画，只能使用自己的故事及图片；Flare 仍关闭。这个权限由仅在 dev 开启的 `COMIC_ALLOW_ALL_AUTHENTICATED_USERS` 控制；关闭或省略该开关后，恢复到 `COMIC_GENERATOR_OWNER_IDS` 白名单（为空则无人可生成）。重新部署前核对私有 R2 与 Images binding，用 Wrangler 对目标 dev D1 应用共用迁移。启用 Flare 前填入 `COMIC_GATEWAY_ID`，以 Wrangler 设置仅授权专用 Gateway 的 `CF_AIG_TOKEN` Secret，并单独核对该 Gateway 的日志、重试与计费配置，再打开 `COMIC_FLARE_ENABLED`。真实验收须另经授权手动发命令，优先使用合成故事和照片。
+部署前核对现有 dev 域名、私有 R2 桶和共用 D1 迁移状态。dev 的 `COMIC_ALLOW_ALL_AUTHENTICATED_USERS` 允许持有有效令牌的活跃用户仅用自己的故事生成；关闭后使用 `COMIC_GENERATOR_OWNER_IDS` 白名单（为空则无人可用）。`COMIC_FLARE_ENABLED` 为布尔开关。此版本不再读取 `COMIC_GATEWAY_ID` 或 `CF_AIG_TOKEN`。原来失败或状态不确定的任务不会在新适配器上重新提交。真实生图验收需单独授权，优先用合成图。
 
-Deployment record / 部署记录 (2026-11-25): `lookme-comic-dev`, current version `8006ee91-eb45-4c30-824b-d9ea93cfc613`. Shared migration `0006` applied and foreign keys checked; both R2 buckets verified private. / 共用迁移 `0006` 已应用并通过外键检查，两个 R2 桶确认私有。现有有效 Token 的生成权限已通过无成本接口验证。
+Migration `0006` is already applied on the current dev D1, and the private buckets remain unchanged. / 当前 dev D1 已应用迁移 `0006`，私有 R2 桶不变。
 
 For another checkout / 换机器接手：clone or pull `master`, run `npm ci` from this directory, and set `COMIC_URL=https://comic.fudaixuexue.eu.cc`. Use a securely available Token file on that computer; Git deliberately does not carry credentials or user data. / 拉取 `master`，在本目录运行 `npm ci`，使用同一个线上地址及新机器上安全可用的 Token 文件。Git 不包含凭据和用户数据。

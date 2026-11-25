@@ -101,9 +101,10 @@ export function createWorker({ outbound = fetch, timeout }: { outbound?: typeof 
         if (attempted && owner && runId) {
           // Never overwrite a successful commit if the write succeeded but confirmation was lost.
           try { await markFailure(env.DB, owner, runId, e.code, provider); } catch { /* keep generating for manual reconciliation */ }
-          console.warn(JSON.stringify({ event: 'comic_attempt_needs_review', run_id: runId, error: e.code }));
+          console.warn(JSON.stringify({ event: 'comic_attempt_needs_review', run_id: runId, error: e.code,
+            ...(e.assetOrigin ? { asset_origin: e.assetOrigin } : {}) }));
         }
-        return reply({ error: e.code, ...(runId ? { run_id: runId } : {}), model_call_attempted: attempted,
+        return reply({ error: e.code, ...(runId ? { run_id: runId } : {}), model_call_attempted: attempted, ...(e.assetOrigin ? { asset_origin: e.assetOrigin } : {}),
           may_have_been_billed: attempted, automatic_retry: false }, e.status);
       }
     },
