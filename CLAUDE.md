@@ -11,9 +11,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目现状与架构
 
-LookMe 的目标是照片上传后异步生成四格漫画。**当前实现图片上传、独立用户 Token 鉴权、事务Outbox自动入队/定时补投，以及仅Queue消费的图片转文字Worker（自动管道已部署dev，Gemma v2已通过真实新上传验收）**；漫画生成、建单、查询和下载 API 均尚未实现。`TODOs.md` 是规划清单，不是当前实现或远端操作授权的依据。
+LookMe 的目标是照片上传后异步生成四格漫画。**当前实现图片上传、独立用户 Token 鉴权、事务Outbox自动入队/定时补投，以及仅Queue消费的图片转文字Worker（自动管道已部署dev，Gemma v2已通过真实新上传验收）**；独立漫画 Worker 已实现并只做本地验证；自动漫画建单尚未接入。`TODOs.md` 是规划清单，不是当前实现或远端操作授权的依据。
 
-仓库包含四个独立 npm 项目：`worker-cloudflare/worker-upload/`、`worker-image2txt/`、`worker-story/` 和 `worker-debug/`，没有仓库根目录 npm workspace。各自入口为 `src/index.ts`，使用 Cloudflare 原生 bindings；上传 Worker 使用 `jpeg-js`，没有路由框架。自动分析管道只包含上传端与图片转文字消费者；故事与调试 Worker 独立发布。
+仓库包含五个独立 npm 项目：`worker-cloudflare/worker-upload/`、`worker-image2txt/`、`worker-story/`、`worker-debug/` 和 `worker-comic/`，没有仓库根目录 npm workspace。各自入口为 `src/index.ts`，使用 Cloudflare 原生 bindings；上传 Worker 使用 `jpeg-js`，没有路由框架。自动分析管道只包含上传端与图片转文字消费者；故事与调试 Worker 独立发布。
 
 上传路径：`POST /photos` → 在 D1 查验 Token 哈希、有效期、撤销状态及 active 用户 → 有界读取 multipart → JPEG 文件/尺寸/实际解码验证 → SHA-256 → 按认证 owner 和客户端 UUID 查幂等记录 → 写私有 R2 → D1同一batch插入照片与Outbox → 返回photo_id和时间，waitUntil尝试入队；Cron补投待发记录。
 
@@ -84,6 +84,7 @@ npm run build             # wrangler deploy --env dev --dry-run，不上线
 
 - `worker-cloudflare/worker-story/` 使用用户 Token 手动调用 `POST /stories`，读取指定用户当天摘要，不读 R2、不使用 Cron/Queue；0005迁移后先登记生成批次，模型成功且结果事务保存后返回JSON，故事有稳定story_id供后续漫画引用；故事自动数量、模型选择、版本锁、费用估算和错误诊断见该目录 README。当前新版本通过本地 mock 验证，不从历史 v4 验收推断新模型真实可用性。
 - `worker-cloudflare/worker-debug/` 提供受密码保护的只读照片/故事调试页，故事按上传日读取D1持久化批次并显示模型、耗时、用量和费用估算；单独配置与发布，不与上传自动分析管道混合部署。
+- `worker-comic/` runs only on explicit CLI requests and preserves multiple results per story in D1/private R2. / 仅 CLI 主动触发；同一故事的多次结果分别保存在 D1/私有 R2。不参与自动部署或排队。见 [双语说明](worker-cloudflare/worker-comic/README.md)。
 - 各目录有自己的 `package.json`；从仓库根目录运行 npm 命令时使用 `npm --prefix worker-cloudflare/<项目目录> ...`，避免根目录 ENOENT。故事结果、秘密文件、Wrangler 缓存不提交 Git。
 
 ## 本地身份与管理工具
@@ -111,6 +112,8 @@ CLI 必须显式选择 `--local` 或 `--remote`；后者固定 `dev`。远端 SQ
 - `0003_photo_analyses.sql`：以 `(photo_id, analysis_version)` 主键独立保存分析状态和文字结果；外键引用照片且禁止删除被引用照片，约束 lease、调用标记与终态。
 - `0004_photo_analysis_dispatch.sql`：上传事务Outbox，只新建表/索引，不回填历史照片；原子领取、租约、持久退避、投递标记。Queue接收不等于分析成功。
 - `0005_story_runs.sql`：故事生成批次、输入照片/摘要快照、独立story_id及四格JSON；模型前登记、成功事务落库，失败不自动重调。2026-11-23已获准应用到dev并发布story/debug；后续迁移/发布仍须另行授权，之后另经授权完成一次Qwen/v5真实生成并验证D1持久化；不据此授权后续模型调用。
+
+- `0006_comic_runs.sql` adds owner-scoped comic generation history only. / 只新增按用户隔离的手动漫画历史表，不改旧任务、不回填。
 
 `skills/deploy_cloudflare/references/schema.sql` 是当前完整结构快照，**不是应覆盖到 0001 的迁移文件**。修改数据库需新增版本化迁移，并同步完整快照。从仓库根目录重新生成可视化：
 

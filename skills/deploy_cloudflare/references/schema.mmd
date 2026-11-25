@@ -24,6 +24,27 @@ erDiagram
         INTEGER created_at_ms "NOT NULL"
         INTEGER updated_at_ms "NOT NULL"
     }
+    comic_runs {
+        TEXT owner_id PK,FK "NOT NULL"
+        TEXT run_id PK "NOT NULL"
+        TEXT story_id FK "NOT NULL"
+        TEXT model "NOT NULL"
+        TEXT profile_version "NOT NULL"
+        TEXT profile_json "NOT NULL"
+        TEXT request_sha256 "NOT NULL"
+        TEXT input_json "NOT NULL"
+        TEXT status "NOT NULL"
+        TEXT provider_request_id "nullable"
+        TEXT result_object_key UK "nullable"
+        TEXT result_mime_type "nullable"
+        INTEGER result_byte_size "nullable"
+        TEXT result_sha256 "nullable"
+        INTEGER result_width "nullable"
+        INTEGER result_height "nullable"
+        TEXT error_code "nullable"
+        INTEGER created_at_ms "NOT NULL"
+        INTEGER updated_at_ms "NOT NULL"
+    }
     job_dispatch {
         TEXT job_id PK,FK,UK "NOT NULL"
         INTEGER dispatch_after_ms "NOT NULL"
@@ -126,6 +147,7 @@ erDiagram
     }
     photos ||..o{ comic_job_photos : "owner_id, photo_id / DELETE RESTRICT"
     comic_jobs ||..o{ comic_job_photos : "owner_id, job_id / DELETE CASCADE"
+    stories ||..o{ comic_runs : "owner_id, story_id / DELETE RESTRICT"
     comic_jobs ||..o| job_dispatch : "job_id / DELETE CASCADE"
     photos ||..o{ photo_analyses : "photo_id / DELETE RESTRICT"
     photos ||..o{ photo_analysis_dispatch : "photo_id / DELETE RESTRICT"

@@ -1,0 +1,63 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "lookme-comic",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-19",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [],
+  "account_id": "4bc883fc791d8706160792e5f7b78b64",
+  "env": {
+    "dev": {
+      "name": "lookme-comic-dev",
+      "workers_dev": false,
+      "preview_urls": false,
+      "routes": [
+        {
+          "pattern": "comic.fudaixuexue.eu.cc",
+          "custom_domain": true,
+          "zone_id": "ad14ac2a1d1f349624f8008f963945dc"
+        }
+      ],
+      "vars": {
+        "COMIC_GENERATION_ENABLED": true,
+        "COMIC_ALLOW_ALL_AUTHENTICATED_USERS": true,
+        "COMIC_GENERATOR_OWNER_IDS": "",
+        "COMIC_FLARE_ENABLED": false,
+        "COMIC_GATEWAY_ACCOUNT_ID": "4bc883fc791d8706160792e5f7b78b64",
+        "COMIC_GATEWAY_ID": ""
+      },
+      "observability": {
+        "enabled": true,
+        "logs": {
+          "enabled": true,
+          "invocation_logs": false
+        }
+      },
+      "ai": {
+        "binding": "AI"
+      },
+      "images": {
+        "binding": "IMAGES"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "lookme-dev",
+          "database_id": "8ca73bf2-a8d9-4d17-a393-105a9f63622d",
+          "migrations_dir": "../worker-upload/migrations"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "PHOTOS",
+          "bucket_name": "lookme-dev-photos"
+        },
+        {
+          "binding": "COMICS",
+          "bucket_name": "lookme-dev-comics"
+        }
+      ]
+    }
+  }
+}

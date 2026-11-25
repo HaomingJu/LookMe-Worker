@@ -1,0 +1,23 @@
+{
+  "name": "lookme-worker-comic",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --config wrangler.local.jsonc",
+    "db:migrate:local": "wrangler d1 migrations apply lookme-dev --local --config wrangler.local.jsonc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "wrangler deploy --env dev --dry-run",
+    "comic": "node scripts/comic.mjs",
+    "deploy:preflight": "node scripts/preflight.mjs"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261119.1",
+    "esbuild": "0.28.2",
+    "miniflare": "5.20261118.0-beta",
+    "typescript": "7.0.2",
+    "vitest": "4.1.12",
+    "wrangler": "4.165.0"
+  }
+}
