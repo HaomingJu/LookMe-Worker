@@ -55,11 +55,11 @@ export function main(args) {
     const user = identifier(options['--user']);
     const days = Number(options['--days'] ?? 90);
     if (!Number.isInteger(days) || days < 1 || days > 365) throw new Error('--days 必须为 1–365 的整数，默认 90 天');
-    if (!options['--out']) throw new Error('必须通过 --out 指定仓库外的新文件，父目录必须已存在并受限');
+    if (!options['--out']) throw new Error('必须通过 --out 指定仓库外的新文件，父目录必须已存在且归当前用户所有');
     const out = resolve(realpathSync(dirname(resolve(options['--out']))), resolve(options['--out']).split(sep).at(-1));
     if (out === repo || out.startsWith(repo + sep) || existsSync(out)) throw new Error('Token 输出必须是仓库外尚不存在的文件');
     const parent = statSync(dirname(out));
-    if ((parent.mode & 0o077) !== 0 || (process.getuid && parent.uid !== process.getuid())) throw new Error('Token 文件的父目录必须属于当前用户且权限不超过 0700');
+    if ((parent.mode & 0o022) !== 0 || (process.getuid && parent.uid !== process.getuid())) throw new Error('Token 文件的父目录必须属于当前用户且不能允许组/其他用户写入');
     const id = randomUUID();
     const { token, hash } = makeCredential();
     // 先安全保存凭据，后注册哈希；注册失败时保留文件，不会出现已激活却丢失 Token。

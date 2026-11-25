@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, statSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, statSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -38,6 +38,13 @@ it('签发仅写哈希，明文存 0600 文件且不打印', () => {
   expect(args).toContain('--local');
   expect(args).not.toContain('--remote');
 });
+it('允许用户指定的非0700目录，只拒绝组/其他用户可写目录', () => {
+  chmodSync(folder, 0o750);
+  const out = join(folder, 'user-specified.token');
+  main(['issue-token', '--local', '--user', 'test-owner', '--out', out]);
+  expect(statSync(out).mode & 0o777).toBe(0o600);
+  chmodSync(folder, 0o700);
+});
 it('拒绝未指定目标、注入 ID、已有输出文件及仓库内秘密文件', () => {
   expect(() => main(['create-user'])).toThrow('显式选择');
   expect(() => main(['disable-user', '--local', '--user', "x';DELETE"])).toThrow('标识');
@@ -45,6 +52,9 @@ it('拒绝未指定目标、注入 ID、已有输出文件及仓库内秘密文�
   main(['issue-token', '--local', '--user', 'test-owner', '--out', out]);
   expect(() => main(['issue-token', '--local', '--user', 'test-owner', '--out', out])).toThrow('尚不存在');
   expect(() => main(['issue-token', '--local', '--user', 'test-owner', '--out', './token-secret'])).toThrow('仓库外');
+  chmodSync(folder, 0o777);
+  expect(() => main(['issue-token', '--local', '--user', 'test-owner', '--out', join(folder, 'writable.token')])).toThrow('不能允许');
+  chmodSync(folder, 0o700);
 });
 it('远端操作显式 dev，不输出管理操作底层错误', () => {
   main(['disable-user', '--remote', '--user', 'test-owner']);

@@ -99,7 +99,7 @@ npm run users -- disable-user --local --user USER_ID
 npm run users -- enable-user --local --user USER_ID
 ```
 
-签发默认 90 天，`--days` 支持 1–365。Token 文件必须在仓库外、尚不存在，父目录属于当前用户且权限 0700，文件权限 0600。先保存明文文件再登记哈希；失败不删除文件或直接重试，应检查远端是否已写成功。
+签发默认 90 天，`--days` 支持 1–365。Token 文件必须在仓库外、尚不存在，父目录归当前用户且不允许组/其他用户写入（可为 0700/0750/0755 等），文件权限 0600。先保存明文文件再登记哈希；失败不删除文件或直接重试，应检查远端是否已写成功。
 
 CLI 必须显式选择 `--local` 或 `--remote`；后者固定 `dev`。远端 SQL 使用 `--command --json` 获取 RETURNING 行，本地使用受限临时 SQL 文件。**远端 `--file --json` 走导入 API，会夹带进度并返回汇总，而非查询行**，不能据解析失败断言 INSERT 未执行。
 
