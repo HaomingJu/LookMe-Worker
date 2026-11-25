@@ -1,5 +1,5 @@
 import { width, height, modelTimeoutMs, specs } from '../config/models.mjs';
-import { readBounded } from '../../worker-image2txt/src/bytes';
+import { imageDataUrl, readBounded } from '../../worker-image2txt/src/bytes';
 import { ComicError, sha256, type Env } from './common';
 
 export type Model = keyof typeof specs;
@@ -101,7 +101,10 @@ function rasterOf(value: unknown): Raster {
   let text: string;
   try { text = atob(base); } catch { throw new ComicError(502, 'invalid_model_image'); }
   if (text.length > maxOutput) throw new ComicError(502, 'invalid_model_image');
-  const bytes = Uint8Array.from(text, c => c.charCodeAt(0));
+  return rasterBytes(Uint8Array.from(text, c => c.charCodeAt(0)));
+}
+
+function rasterBytes(bytes: Uint8Array<ArrayBuffer>): Raster {
   if (bytes.length >= 45 && [137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82]
     .every((value, index) => bytes[index] === value) &&
     [0,0,0,0,73,69,78,68,174,66,96,130].every((value, index) => bytes[bytes.length - 12 + index] === value)) {
@@ -123,13 +126,53 @@ async function boundedJson(response: Response, signal: AbortSignal) {
   catch { signal.throwIfAborted(); throw new ComicError(502, 'invalid_model_response'); }
 }
 
-export function checkProvider(env: Env, model: Model) {
-  if (specs[model].adapter === 'workers-ai') {
-    if (!env.AI) throw new ComicError(503, 'workers_ai_unavailable');
-  } else if (env.COMIC_FLARE_ENABLED !== true || !/^[0-9a-f]{32}$/.test(env.COMIC_GATEWAY_ACCOUNT_ID ?? '') ||
-    !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(env.COMIC_GATEWAY_ID ?? '') || !env.CF_AIG_TOKEN?.trim()) {
-    throw new ComicError(503, 'flare_gateway_unavailable');
+// Accept inline raster data or Cloudflare's image service / R2 object endpoints.
+async function downloadFlareImage(value: unknown, outbound: typeof fetch, signal: AbortSignal) {
+  if (typeof value !== 'string') throw new ComicError(502, 'invalid_model_asset_url', 'non-string');
+  if (/^(?:data:image\/(?:png|jpeg);base64,)?(?:iVBORw0KGgo|\/9j\/)/.test(value)) {
+    const raster = rasterOf(value);
+    if (value.startsWith('data:') && !value.startsWith(`data:${raster.mime};`)) throw new ComicError(502, 'invalid_model_image');
+    return raster;
   }
+  if (value.length > 8192 || !/^https:\/\//i.test(value)) throw new ComicError(502, 'invalid_model_asset_url', 'not-https');
+  let url: URL;
+  try { url = new URL(value); } catch { throw new ComicError(502, 'invalid_model_asset_url', 'malformed'); }
+  const imageService = /^[a-z0-9-]+\.aig\.cloudflare\.com$/.test(url.hostname);
+  const publicR2 = /^pub-[a-f0-9]{32}\.r2\.dev$/.test(url.hostname);
+  // Observed on a real Unified Billing Flare result; R2 uses the bucket as
+  // the first host label. Do not allow arbitrary S3 accounts or bucket hosts.
+  const gatewayR2 = url.hostname === 'ai-gateway-outputs.0d37909e38d3e99c29fa2cd343ac421a.r2.cloudflarestorage.com';
+  const origin = /^(?:[a-z0-9-]+\.){1,5}(?:cloudflare\.com|cloudflarestorage\.com|r2\.dev)$/.test(url.hostname)
+    && url.hostname.length <= 120 ? url.hostname : 'other-https';
+  if (url.protocol !== 'https:' || !(imageService || publicR2 || gatewayR2) ||
+    url.username || url.password || url.port || url.hash || url.pathname === '/') {
+    throw new ComicError(502, 'invalid_model_asset_url', origin);
+  }
+  let response: Response;
+  try {
+    response = await outbound(url.href, { method: 'GET', redirect: 'manual', signal,
+      headers: { Accept: 'image/png, image/jpeg', 'Cache-Control': 'no-store' },
+      cf: { cacheTtl: 0 } });
+  } catch { signal.throwIfAborted(); throw new ComicError(502, 'model_asset_download_failed'); }
+  const type = response.headers.get('Content-Type')?.split(';', 1)[0]?.trim().toLowerCase();
+  if (!response.ok || !response.body || (type !== 'image/png' && type !== 'image/jpeg' && type !== 'application/octet-stream') ||
+    Number(response.headers.get('Content-Length')) > maxOutput) {
+    if (response.body) void response.body.cancel().catch(() => {});
+    throw new ComicError(502, 'model_asset_download_failed');
+  }
+  let bytes: Uint8Array;
+  try { bytes = await readBounded(response.body, maxOutput, signal); }
+  catch { signal.throwIfAborted(); throw new ComicError(502, 'model_asset_download_failed'); }
+  const raster = rasterBytes(new Uint8Array(bytes));
+  if (type !== 'application/octet-stream' && raster.mime !== type) throw new ComicError(502, 'invalid_model_image');
+  return raster;
+}
+
+export function checkProvider(env: Env, model: Model) {
+  if (specs[model].adapter === 'workers-ai-flare' && env.COMIC_FLARE_ENABLED !== true) {
+    throw new ComicError(503, 'flare_disabled');
+  }
+  if (!env.AI) throw new ComicError(503, 'workers_ai_unavailable');
 }
 
 export function prepareRender(env: Env, model: Model, prompt: string, refs: Ref[], outbound: typeof fetch): Prepared {
@@ -151,23 +194,18 @@ export function prepareRender(env: Env, model: Model, prompt: string, refs: Ref[
     };
   }
   const profile = specs['openai/gpt-image-2.6-flare'];
-  form.append('model', 'gpt-image-2.6-flare');
-  form.append('size', size);
-  form.append('quality', profile.quality);
-  form.append('output_format', profile.output_format);
-  refs.forEach((ref, i) => form.append('image[]', ref.blob, `ref-${i}.jpg`));
-  const endpoint = `https://gateway.ai.cloudflare.com/v1/${env.COMIC_GATEWAY_ACCOUNT_ID}/${env.COMIC_GATEWAY_ID}/openai/images/edits`;
   return {
-    submit: signal => outbound(endpoint, { method: 'POST', body: form, signal, redirect: 'error',
-      headers: { 'cf-aig-authorization': `Bearer ${env.CF_AIG_TOKEN}`, 'cf-aig-collect-log': 'false',
-        'cf-aig-collect-log-payload': 'false', 'cf-aig-skip-cache': 'true', 'cf-aig-max-attempts': '1',
-        'cf-aig-request-timeout': String(modelTimeoutMs) } }),
-    async read(raw, signal) {
-      if (!(raw instanceof Response)) throw new ComicError(502, 'invalid_model_response');
-      const payload = object(await boundedJson(raw, signal));
-      const first = Array.isArray(payload.data) && payload.data.length === 1 ? object(payload.data[0]) : {};
-      // A provider-native result is inline b64_json. Never fetch a URL supplied in model output.
-      return { raster: rasterOf(first.b64_json), providerId: providerId(raw.headers.get('x-request-id') ?? raw.headers.get('cf-aig-request-id')) };
+    async submit(signal) {
+      const images = [];
+      for (const ref of refs) images.push(imageDataUrl(new Uint8Array(await ref.blob.arrayBuffer())));
+      signal.throwIfAborted();
+      return env.AI!.run(model, { prompt, images, size, quality: profile.quality, output_format: profile.output_format });
+    },
+    async read(input, signal) {
+      const raw = input instanceof Response ? await boundedJson(input, signal) : input;
+      const payload = object(raw), result = object(payload.result);
+      if (payload.state !== 'Completed') throw new ComicError(502, 'invalid_model_response');
+      return { raster: await downloadFlareImage(result.image, outbound, signal), providerId: providerId(payload.id) };
     },
   };
 }

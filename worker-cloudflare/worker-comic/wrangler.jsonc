@@ -23,9 +23,7 @@
         "COMIC_GENERATION_ENABLED": true,
         "COMIC_ALLOW_ALL_AUTHENTICATED_USERS": true,
         "COMIC_GENERATOR_OWNER_IDS": "",
-        "COMIC_FLARE_ENABLED": false,
-        "COMIC_GATEWAY_ACCOUNT_ID": "4bc883fc791d8706160792e5f7b78b64",
-        "COMIC_GATEWAY_ID": ""
+        "COMIC_FLARE_ENABLED": true
       },
       "observability": {
         "enabled": true,
