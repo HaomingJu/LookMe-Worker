@@ -57,6 +57,13 @@
         </div>
         <button id="retry-page" class="secondary" type="button" hidden>重试加载</button>
       </section>
+      <section id="comics-panel" class="comic-panel" aria-labelledby="comics-title" hidden>
+        <div class="section-heading"><h2 id="comics-title">漫画</h2></div>
+        <p id="comics-status" class="muted" role="status"></p>
+        <div id="comic-list" aria-label="漫画生成记录"></div>
+        <div class="pager"><button id="more-comics" class="secondary" type="button" hidden>加载更多漫画</button>
+        <button id="retry-comics" class="secondary" type="button" hidden>重试漫画查询</button></div>
+      </section>
       <section id="stories-panel" class="story-panel" aria-labelledby="stories-title" hidden>
         <div class="section-heading"><h2 id="stories-title">故事</h2></div>
         <p id="story-status" class="muted" role="status"></p>

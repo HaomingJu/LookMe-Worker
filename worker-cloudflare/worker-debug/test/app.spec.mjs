@@ -26,15 +26,23 @@ const manyPhotos = count => Array.from({ length: count }, (_, index) => ({ ...ph
 const photoIDs = page => page.locator('.photo-details-button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label').split(' ')[0]));
 
 async function fixtures(page, options = {}) {
-  const calls = { timeline: [], images: [], external: [], stories: [], details: [] };
+  const calls = { timeline: [], images: [], external: [], stories: [], details: [], comics: [], comicImages: [] };
   await page.route('**/*', async route => {
     const request = route.request();
     const url = new URL(request.url());
     if (url.hostname !== 'localhost') { calls.external.push(request.url()); return route.abort(); }
     const authorized = (request.headers().cookie || '').includes('lookme_debug=');
-    if (['/api/users', '/api/timeline', '/api/stories', '/api/story'].includes(url.pathname) || url.pathname.startsWith('/photo/')) {
+    if (['/api/users', '/api/timeline', '/api/stories', '/api/story', '/api/comics'].includes(url.pathname) || url.pathname.startsWith('/api/comic/') || url.pathname.startsWith('/photo/')) {
       if (!authorized) return route.fulfill({ status: 401, json: { error: 'unauthorized' } });
       if (url.pathname === '/api/users') return route.fulfill({ json: { users: options.users ?? users } });
+      if (url.pathname === '/api/comics') {
+        calls.comics.push(url);
+        return options.comics ? options.comics(route,url,calls) : route.fulfill({json:{runs:[],next_cursor:null,date_basis:'uploaded_at_ms'}});
+      }
+      if (url.pathname.startsWith('/api/comic/')) {
+        calls.comicImages.push(url);
+        return options.comicImage ? options.comicImage(route,url,calls) : route.fulfill({contentType:'image/svg+xml',body:image});
+      }
       if (url.pathname === '/api/stories') {
         calls.stories.push(url);
         return options.stories ? options.stories(route,url,calls) : route.fulfill({json:{runs:[],next_cursor:null,date_basis:'uploaded_at_ms'}});
@@ -478,4 +486,22 @@ test('故事独立折叠、键盘切换和整批收起不会重复读取或丢�
   const expand = page.getByRole('button', { name: '展开故事列表' }); await expect(expand).toHaveAttribute('aria-expanded', 'false'); await expand.click();
   await expect(page.locator('.story-content')).toBeVisible(); await expect(stories.nth(1)).toHaveAttribute('open', '');
   expect(calls.details).toHaveLength(1); expect(calls.external).toEqual([]);
+});
+
+
+const comicRun = { run_id:'50000000-0000-4000-8000-000000000001', story_id:'40000000-0000-4000-8000-000000000001', story_title:'测试故事',
+  model:'@cf/black-forest-labs/flux-2-klein-9b', profile_version:'v1', status:'succeeded', provider_request_id:'comic-provider',
+  created_at_ms:uploadBase+1000, updated_at_ms:uploadBase+2000, reference_photo_ids:[photos[0].photo_id], may_have_been_billed:true,
+  image:{path:'/api/comic/50000000-0000-4000-8000-000000000001/image?user='+users[0].user_id,mime_type:'image/png',byte_size:4,sha256:'b'.repeat(64),width:1024,height:1536} };
+test('漫画视图显示模型和成图元信息，私有图片加载且与照片/故事视图隔离', async ({ page, context }) => {
+  const calls=await fixtures(page,{comics:(route,url)=>url.searchParams.get('user')===users[1].user_id ? route.fulfill({json:{runs:[],next_cursor:null,date_basis:'uploaded_at_ms'}}) : route.fulfill({json:{runs:[comicRun],next_cursor:null,date_basis:'uploaded_at_ms'}})});
+  await login(page); await page.locator('#comics-view').click();
+  await expect(page.locator('#comics-panel')).toBeVisible(); await expect(page.locator('#photos-panel')).toBeHidden(); await expect(page.locator('#stories-panel')).toBeHidden();
+  await expect(page.locator('#date-label')).toHaveText('漫画日期（故事上传日）');
+  await expect(page.locator('.comic-run')).toHaveCount(1); await expect(page.locator('.comic-run')).toContainText(comicRun.model); await expect(page.locator('.comic-run')).toContainText('1024 × 1536');
+  await page.locator('.comic-image').scrollIntoViewIfNeeded(); await expect(page.locator('.comic-image')).toBeVisible(); expect(calls.comics).toHaveLength(1); expect(calls.comicImages).toHaveLength(1);
+  expect(calls.timeline).toHaveLength(1); expect(calls.stories).toHaveLength(0); expect(calls.external).toEqual([]);
+  await page.locator('.user-button').nth(1).click(); await expect(page.locator('.comic-run')).toHaveCount(0); await expect(page.locator('#comics-status')).toContainText('暂无漫画记录');
+  expect(calls.comics.at(-1).searchParams.get('user')).toBe(users[1].user_id);
+  expect((await context.cookies()).find(c=>c.name==='lookme_debug')).toMatchObject({httpOnly:true,secure:true,sameSite:'Strict'});
 });

@@ -4,14 +4,14 @@
   const PAGE_SIZE = 24;
   const ids = ['login-screen', 'login-form', 'password', 'login-button', 'login-error', 'workspace',
     'user-list', 'user-count', 'toggle-sidebar', 'refresh', 'filters', 'date', 'start-time', 'end-time',
-    'previous-day', 'next-day', 'full-day', 'apply', 'zone-note', 'notice', 'photos-panel', 'stories-panel',
-    'story-status', 'photo-count', 'empty', 'photo-grid', 'pager', 'previous-page', 'next-page', 'page-label',
+    'previous-day', 'next-day', 'full-day', 'apply', 'zone-note', 'notice', 'photos-panel', 'stories-panel', 'comics-panel',
+    'story-status', 'comics-status', 'comic-list', 'more-comics', 'retry-comics', 'photo-count', 'empty', 'photo-grid', 'pager', 'previous-page', 'next-page', 'page-label',
     'retry-page', 'lightbox', 'close-lightbox', 'large-photo', 'large-caption', 'info-dialog', 'close-info',
     'info-summary', 'info-metadata', 'date-label', 'story-list', 'more-stories', 'retry-stories'];
   const ui = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
   const state = { users: [], user: null, view: 'photos', range: null, photos: [],
     pageIndex: 0, pageCursors: [null], nextCursor: null, epoch: 0, loading: false,
-    controller: null, images: new Map(), lightbox: null, storyCursor: null, storyCount: 0 };
+    controller: null, images: new Map(), lightbox: null, storyCursor: null, storyCount: 0, comicCursor: null, comicCount: 0 };
   const errors = { unauthorized: '会话过期，请登录。', debug_not_configured: '未配置访问口令。',
     storage_unavailable: '数据读取失败。', user_not_found: '用户不存在，请刷新。',
     invalid_date: '日期无效。', invalid_time_range: '结束时间不能早于开始时间。',
@@ -95,10 +95,13 @@
     ui['photo-grid'].replaceChildren();
     state.photos = [];
     ui['story-list'].replaceChildren();
+    ui['comic-list'].replaceChildren();
     ui['more-stories'].hidden = true;
+    ui['more-comics'].hidden = true;
+    ui['retry-comics'].hidden = true;
     ui['retry-stories'].hidden = true;
     ui['story-status'].textContent = '';
-    state.storyCursor = null; state.storyCount = 0;
+    state.storyCursor = null; state.storyCount = 0; state.comicCursor = null; state.comicCount = 0;
     state.nextCursor = null;
     state.loading = false;
     ui.empty.hidden = true;
@@ -107,17 +110,18 @@
     ui['photo-count'].textContent = '';
   }
   function updateView() {
-    const stories = state.view === 'stories';
-    ui['photos-panel'].hidden = stories;
+    const stories = state.view === 'stories', comics = state.view === 'comics';
+    ui['photos-panel'].hidden = stories || comics;
     ui['stories-panel'].hidden = !stories;
+    ui['comics-panel'].hidden = !comics;
     ui.filters.dataset.view = state.view;
-    ui.filters.setAttribute('aria-label', stories ? '按故事上传日期筛选' : '按拍摄时间筛选');
-    for (const node of document.querySelectorAll('.photo-filter')) node.hidden = stories;
-    ui['start-time'].disabled = stories;
-    ui['end-time'].disabled = stories;
+    ui.filters.setAttribute('aria-label', stories || comics ? '按故事/漫画上传日期筛选' : '按拍摄时间筛选');
+    for (const node of document.querySelectorAll('.photo-filter')) node.hidden = stories || comics;
+    ui['start-time'].disabled = stories || comics;
+    ui['end-time'].disabled = stories || comics;
     ui['end-time'].setCustomValidity('');
-    ui['date-label'].textContent = stories ? '故事日期（上传日）' : '拍摄日期';
-    ui['zone-note'].textContent = stories ? 'UTC+8 · 按上传日 · 只读历史结果' : 'UTC+8 · 含结束分钟';
+    ui['date-label'].textContent = stories || comics ? (stories ? '故事日期（上传日）' : '漫画日期（故事上传日）') : '拍摄日期';
+    ui['zone-note'].textContent = stories || comics ? `UTC+8 · 按${stories ? '故事上传日' : '故事上传日'} · 只读历史结果` : 'UTC+8 · 含结束分钟';
   }
   function showLogin(error = '') {
     resetPhotos();
@@ -157,7 +161,7 @@
       group.append(button);
       if (selected) {
         const links = element('div', 'view-links');
-        for (const [view, name] of [['photos', '照片'], ['stories', '故事']]) {
+        for (const [view, name] of [['photos', '照片'], ['stories', '故事'], ['comics', '漫画']]) {
           const link = element('button', 'view-button', name);
           link.id = `${view}-view`;
           link.type = 'button';
@@ -224,7 +228,7 @@
   function switchView(view) {
     if (!state.user || state.view === view) return;
     state.view = view;
-    if (state.range) state.range.date = dateValue((view === 'stories' ? state.user.last_uploaded_at_ms : state.user.last_captured_at_ms) ?? Date.now());
+    if (state.range) state.range.date = dateValue((view === 'stories' || view === 'comics' ? state.user.last_uploaded_at_ms : state.user.last_captured_at_ms) ?? Date.now());
     restoreRange();
     renderUsers();
     updateView();
@@ -245,7 +249,8 @@
     ui['previous-day'].disabled = state.range.date === ui.date.min;
     ui['next-day'].disabled = state.range.date === ui.date.max;
     if (state.view === 'photos') loadPage(0);
-    else loadStories();
+    else if (state.view === 'stories') loadStories();
+    else loadComics();
   }
   function updatePager() {
     ui['page-label'].textContent = `第 ${state.pageIndex + 1} 页`;
@@ -385,6 +390,44 @@
       notice();
     } catch (error) { fail(error, epoch); if (epoch === state.epoch) { ui['retry-stories'].hidden = false; ui['retry-stories'].dataset.more = String(more); } }
     finally { if (epoch === state.epoch) { state.loading = false; ui['more-stories'].disabled = false; } }
+  }
+  const comicDuration = value => typeof value === 'number' && Number.isFinite(value) ? `${(value / 1000).toFixed(2)} 秒` : '未知';
+  function comicCard(run) {
+    const card = element('article', 'comic-run');
+    const status = { succeeded: '已保存', generating: '生成中 / 未确认', needs_review: '需人工核查' };
+    card.append(element('h3', '', `${run.story_title || '漫画'} · ${status[run.status] || run.status}`));
+    const meta = metadata([
+      ['模型', run.model], ['Profile', run.profile_version], ['故事', run.story_title], ['故事ID', run.story_id], ['批次ID', run.run_id],
+      ['生成时间', timestamp(run.created_at_ms)], ['更新时间', timestamp(run.updated_at_ms)], ['供应商请求ID', run.provider_request_id],
+      ['输出尺寸', run.image?.width && run.image?.height ? `${run.image.width} × ${run.image.height}` : '未生成'],
+      ['文件大小', typeof run.image?.byte_size === 'number' ? `${run.image.byte_size} 字节` : '未生成'], ['MIME', run.image?.mime_type],
+      ['SHA-256', run.image?.sha256], ['来源照片', (run.reference_photo_ids || []).join('、') || '未返回'],
+      ['计费提示', run.may_have_been_billed ? '生成请求可能产生费用；实际账单以Cloudflare为准' : '无'], ['错误码', run.error_code || '无'],
+    ]);
+    card.append(meta);
+    if (run.image) {
+      const image = element('img', 'comic-image'); image.alt = `${run.story_title || '漫画'}，${run.model}`; image.loading = 'lazy'; image.decoding = 'async';
+      image.src = run.image.path; image.addEventListener('error', () => { image.replaceWith(element('p', 'muted', '漫画图片读取失败')); }, { once: true });
+      card.append(image);
+    }
+    return card;
+  }
+  async function loadComics(more = false) {
+    if (state.loading || !state.user || !state.range || state.view !== 'comics') return;
+    const epoch = state.epoch; const controller = state.controller ??= new AbortController(); state.loading = true;
+    ui['more-comics'].disabled = true; ui['retry-comics'].hidden = true; notice('加载漫画…');
+    try {
+      const query = new URLSearchParams({ user: state.user.user_id, date: state.range.date });
+      if (more && state.comicCursor) query.set('cursor', state.comicCursor);
+      const data = await json(`/api/comics?${query}`, { signal: controller.signal });
+      if (epoch !== state.epoch) return;
+      if (!more) { ui['comic-list'].replaceChildren(); state.comicCount = 0; }
+      for (const run of data.runs) ui['comic-list'].append(comicCard(run));
+      state.comicCount += data.runs.length; state.comicCursor = data.next_cursor;
+      ui['more-comics'].hidden = !state.comicCursor;
+      ui['comics-status'].textContent = state.comicCount ? `已加载 ${state.comicCount} 条漫画记录 · 只读，不触发生成` : '该故事上传日期暂无漫画记录。'; notice();
+    } catch (error) { fail(error, epoch); if (epoch === state.epoch) { ui['retry-comics'].hidden = false; ui['retry-comics'].dataset.more = String(more); } }
+    finally { if (epoch === state.epoch) { state.loading = false; ui['more-comics'].disabled = false; } }
   }
   function photoPath(photo) {
     return `/photo/${encodeURIComponent(photo.photo_id)}?user=${encodeURIComponent(state.user.user_id)}`;
@@ -529,6 +572,8 @@
   });
   ui['more-stories'].addEventListener('click', () => loadStories(true));
   ui['retry-stories'].addEventListener('click', () => loadStories(ui['retry-stories'].dataset.more === 'true'));
+  ui['more-comics'].addEventListener('click', () => loadComics(true));
+  ui['retry-comics'].addEventListener('click', () => loadComics(ui['retry-comics'].dataset.more === 'true'));
   ui.refresh.addEventListener('click', () => loadUsers());
   ui.filters.addEventListener('submit', event => { event.preventDefault(); applyFilters(); });
   for (const id of ['start-time', 'end-time']) ui[id].addEventListener('input', () => ui['end-time'].setCustomValidity(''));

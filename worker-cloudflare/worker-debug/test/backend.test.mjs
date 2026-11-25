@@ -21,6 +21,7 @@ const id = number => `10000000-0000-4000-8000-${String(number).padStart(12, '0')
 let mf;
 let db;
 let bucket;
+let comicsBucket;
 let session;
 
 async function addPhoto(number, capture, upload = uploadedAt('12:00:00'), owner = OWNER) {
@@ -66,7 +67,7 @@ describe('拍摄时间筛选：本地真实 D1/R2', { concurrency: false }, () =
       script: bundle.outputFiles[0].text,
       compatibilityDate: '2026-11-19',
       d1Databases: ['DB'],
-      r2Buckets: ['PHOTOS'],
+      r2Buckets: ['PHOTOS', 'COMICS'],
       d1Persist: false,
       r2Persist: false,
       bindings: { DEBUG_PASSWORD: PASSWORD },
@@ -74,6 +75,7 @@ describe('拍摄时间筛选：本地真实 D1/R2', { concurrency: false }, () =
     }));
     db = await mf.getD1Database('DB');
     bucket = await mf.getR2Bucket('PHOTOS');
+    comicsBucket = await mf.getR2Bucket('COMICS');
     for (const filename of (await readdir(migrations)).filter(name => name.endsWith('.sql')).sort()) {
       const sql = (await readFile(new URL(filename, migrations), 'utf8')).replace(/--[^\n]*/g, '');
       for (const statement of sql.split(';').filter(value => value.trim())) await db.prepare(statement).run();
@@ -89,6 +91,7 @@ describe('拍摄时间筛选：本地真实 D1/R2', { concurrency: false }, () =
   }, { timeout: 30000 });
 
   beforeEach(async () => {
+    await db.prepare('DELETE FROM comic_runs').run();
     await db.prepare('DELETE FROM stories').run();
     await db.prepare('DELETE FROM story_run_photos').run();
     await db.prepare('DELETE FROM story_runs').run();
@@ -270,6 +273,37 @@ describe('拍摄时间筛选：本地真实 D1/R2', { concurrency: false }, () =
     assert.equal((await fetchJSON(`/api/story?user=${OWNER}&run_id=${pending.runId}`)).body.result,null);
     assert.equal((await fetchJSON(`/api/stories?user=${OWNER}&date=2026-02-30`)).response.status,400);
     assert.equal((await fetchJSON(`/api/story?user=${OWNER}&run_id=bad`)).response.status,400);
+  });
+  async function addComic(number, owner=OWNER, status='succeeded') {
+    const sourcePhoto=await addPhoto(100+number, capturedAt('11:00:00'), uploadedAt('10:00:00'), owner);
+    const runId=id(500+number), storyId=id(400+number), objectKey=`comic-fixtures/${runId}.png`;
+    await db.prepare(`INSERT INTO story_runs(run_id,owner_id,story_date,timezone,date_basis,story_version,analysis_version,model,input_sha256,input_json,profile_json,status,response_json,created_at_ms,updated_at_ms)
+      VALUES (?,?,'2026-11-21','Asia/Shanghai','uploaded_at_ms','v5','v2','@cf/qwen/qwen3.8-27b',?,'{}','{}','succeeded',?, ?, ?)`).bind(runId,owner,'f'.repeat(64),JSON.stringify({run_id:runId,story_count:1}),uploadedAt('10:00:00'),uploadedAt('10:00:00')).run();
+    await db.prepare(`INSERT INTO stories(story_id,owner_id,run_id,position,title,summary,image_prompt,panels_json,source_photo_ids_json,created_at_ms)
+      VALUES (?, ?, ?, 0, '测试故事', '测试摘要', '测试提示词', ?, ?, ?)`).bind(storyId,owner,runId,JSON.stringify([{panel:1,description:'a',image_prompt:'a',source_photo_ids:[sourcePhoto]} ,{panel:2,description:'b',image_prompt:'b',source_photo_ids:[sourcePhoto]},{panel:3,description:'c',image_prompt:'c',source_photo_ids:[sourcePhoto]},{panel:4,description:'d',image_prompt:'d',source_photo_ids:[sourcePhoto]}]),JSON.stringify([sourcePhoto]),uploadedAt('10:00:00')).run();
+    const image={run_id:runId,story_id:storyId,model:'@cf/black-forest-labs/flux-2-klein-9b',profile_version:'v1',status,provider_request_id:'comic-provider',error_code:status==='succeeded'?null:'comic_error',created_at_ms:uploadedAt('10:00:00'),updated_at_ms:uploadedAt('10:01:00'),result_object_key:status==='succeeded'?objectKey:null,result_mime_type:status==='succeeded'?'image/png':null,result_byte_size:status==='succeeded'?4:null,result_sha256:status==='succeeded'?'b'.repeat(64):null,result_width:status==='succeeded'?1024:null,result_height:status==='succeeded'?1536:null};
+    await db.prepare(`INSERT INTO comic_runs(owner_id,run_id,story_id,model,profile_version,profile_json,request_sha256,input_json,status,provider_request_id,result_object_key,result_mime_type,result_byte_size,result_sha256,result_width,result_height,error_code,created_at_ms,updated_at_ms)
+      VALUES (?,?,?,?,?,'{}',?,'{}',?,?,?,?,?,?,?,?,?,?,?)`).bind(owner,runId,storyId,image.model,image.profile_version,'e'.repeat(64),status,image.provider_request_id,image.result_object_key,image.result_mime_type,image.result_byte_size,image.result_sha256,image.result_width,image.result_height,image.error_code,image.created_at_ms,image.updated_at_ms).run();
+    if(status==='succeeded') await comicsBucket.put(objectKey,new Uint8Array([1,2,3,4]),{customMetadata:{sha256:'b'.repeat(64)},httpMetadata:{contentType:'image/png'}});
+    return image;
+  }
+  it('漫画列表按用户/故事上传日隔离，返回模型和图片元信息且图片走私有绑定', async () => {
+    const comic=await addComic(1); await addComic(2,OTHER_OWNER); await addComic(3,OWNER,'needs_review');
+    const result=await fetchJSON(`/api/comics?user=${OWNER}&date=${uploadDay}`);
+    assert.equal(result.response.status,200);assert.equal(result.body.runs.length,2);
+    const success=result.body.runs.find(r=>r.run_id===comic.run_id);assert.equal(success.model,comic.model);assert.equal(success.profile_version,'v1');assert.equal(success.image.width,1024);assert.equal(success.image.height,1536);assert.equal(success.reference_photo_ids.length,0);
+    const imageResponse=await mf.dispatchFetch(`${BASE_URL}${success.image.path}`,{headers:{Cookie:session}});assert.equal(imageResponse.status,200);assert.equal(imageResponse.headers.get('Content-Type'),'image/png');assert.equal((await imageResponse.arrayBuffer()).byteLength,4);
+    assert.equal((await fetchJSON(`/api/comics?user=${OTHER_OWNER}&date=${uploadDay}`)).body.runs.length,1);
+    assert.equal((await fetchJSON(`/api/comics?user=${OWNER}&date=${capturedDay}`)).body.runs.length,0);
+  });
+  it('漫画图片和列表需要会话，错误R2完整性返回503，未成功状态不能下载', async () => {
+    const comic=await addComic(4);const path=`/api/comic/${comic.run_id}/image?user=${OWNER}`;
+    assert.equal((await fetchJSON(path,false)).response.status,401);
+    await comicsBucket.put('comic-fixtures/'+comic.run_id+'.png',new Uint8Array([9,9,9,9]),{customMetadata:{sha256:'wrong'}});
+    assert.equal((await fetchJSON(path)).response.status,503);
+    const pending=await addComic(5,OWNER,'needs_review');
+    assert.equal((await fetchJSON(`/api/comic/${pending.run_id}/image?user=${OWNER}`)).response.status,404);
+    assert.equal((await fetchJSON(`/api/comics?user=${OWNER}&date=2026-11-21`)).response.status,200);
   });
   it('拍摄时间改动不绕过现有登录保护', async () => {
     await addPhoto(22, capturedAt('08:00:00'));

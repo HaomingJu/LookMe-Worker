@@ -143,3 +143,7 @@ dialog p { font: 11px var(--mono); padding-top: 10px; text-align: center; }
 .saved-story-body { padding-top: 12px; }
 .story-run h5 { font-size: 13px; }
 @media (max-width: 700px) { .story-panels { grid-template-columns: 1fr; } .story-metadata { grid-template-columns: 90px minmax(0, 1fr); } }
+
+.comic-run { margin: 16px 0; padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); min-width: 0; }
+.comic-run h3 { font-size: 15px; margin-bottom: 12px; }
+.comic-image { display: block; width: min(100%, 420px); max-height: 620px; object-fit: contain; margin: 16px auto 0; border: 1px solid var(--line); border-radius: 6px; background: var(--canvas); }

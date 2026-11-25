@@ -15,6 +15,7 @@
     }
   ],
   "r2_buckets": [
-    { "binding": "PHOTOS", "bucket_name": "lookme-debug-local-photos" }
+    { "binding": "PHOTOS", "bucket_name": "lookme-debug-local-photos" },
+    { "binding": "COMICS", "bucket_name": "lookme-debug-local-comics" }
   ]
 }

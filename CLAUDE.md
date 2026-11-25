@@ -83,7 +83,7 @@ npm run build             # wrangler deploy --env dev --dry-run，不上线
 ## 故事与调试 Worker
 
 - `worker-cloudflare/worker-story/` 使用用户 Token 手动调用 `POST /stories`，读取指定用户当天摘要，不读 R2、不使用 Cron/Queue；0005迁移后先登记生成批次，模型成功且结果事务保存后返回JSON，故事有稳定story_id供后续漫画引用；故事自动数量、模型选择、版本锁、费用估算和错误诊断见该目录 README。当前新版本通过本地 mock 验证，不从历史 v4 验收推断新模型真实可用性。
-- `worker-cloudflare/worker-debug/` 提供受密码保护的只读照片/故事调试页，故事按上传日读取D1持久化批次并显示模型、耗时、用量和费用估算；单独配置与发布，不与上传自动分析管道混合部署。
+- `worker-cloudflare/worker-debug/` 提供受密码保护的只读照片/故事/漫画调试页，故事按上传日读取D1持久化批次并显示模型、耗时、用量和费用估算；漫画按story_id/日期读取comic_runs并经COMICS私有绑定展示模型与成图元信息；单独配置与发布，不与上传自动分析管道混合部署。
 - `worker-comic/` runs only on explicit CLI requests and preserves multiple results per story in D1/private R2. / 仅 CLI 主动触发；同一故事的多次结果分别保存在 D1/私有 R2。不参与自动部署或排队。见 [双语说明](worker-cloudflare/worker-comic/README.md)。
 - 各目录有自己的 `package.json`；从仓库根目录运行 npm 命令时使用 `npm --prefix worker-cloudflare/<项目目录> ...`，避免根目录 ENOENT。故事结果、秘密文件、Wrangler 缓存不提交 Git。
 
