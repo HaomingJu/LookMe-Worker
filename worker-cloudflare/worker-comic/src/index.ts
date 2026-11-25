@@ -1,6 +1,7 @@
 import { readBounded } from '../../worker-image2txt/src/bytes';
 import { defaultModel, isModel, specs, uuid } from '../config/models.mjs';
 import { ComicError, noCache, ownerOf, reply, sha256, type Env } from './common';
+import { daily } from './daily';
 import { checkProvider, prepareRender, reference, render, type Model } from './render';
 import { claim, finish, getRun, getStory, history, loadPhotos, markFailure, publicRun, storyPrompt, type Run } from './store';
 
@@ -40,7 +41,8 @@ export function createWorker({ outbound = fetch, timeout }: { outbound?: typeof 
       const url = new URL(request.url);
       const runPath = /^\/comics\/([a-f0-9-]+)(\/image)?$/.exec(url.pathname);
       const root = url.pathname === '/comics';
-      if (!root && (!runPath || !uuid.test(runPath[1]))) return reply({ error: 'not_found' }, 404);
+      const dailyFeed = url.pathname === '/daily';
+      if (!root && !dailyFeed && (!runPath || !uuid.test(runPath[1]))) return reply({ error: 'not_found' }, 404);
       if (request.method !== 'GET' && !(root && request.method === 'POST')) {
         return reply({ error: 'method_not_allowed' }, 405, { Allow: root ? 'GET, POST' : 'GET' });
       }
@@ -50,6 +52,7 @@ export function createWorker({ outbound = fetch, timeout }: { outbound?: typeof 
       let provider: string | null = null;
       try {
         owner = await ownerOf(request, env.DB);
+        if (dailyFeed) return await daily(env.DB, owner, url);
         if (runPath) {
           const run = await getRun(env.DB, owner, runPath[1]);
           if (!run) throw new ComicError(404, 'run_not_found');

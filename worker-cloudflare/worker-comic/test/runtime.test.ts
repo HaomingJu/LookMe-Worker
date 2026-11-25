@@ -92,6 +92,26 @@ describe('manual runtime / 手动运行', () => {
     expect((await db.prepare('PRAGMA foreign_key_check').all()).results).toEqual([]);
   });
 
+  it('serves saved stories and latest comics by day without mutation or cross-owner access', async () => {
+    const first = await getJson(await generate());
+    expect(first.code).toBe(201);
+    const date = '2026-11-25';
+    const feed = await getJson(await call('/daily?date='+date, tokens.a));
+    expect(feed).toMatchObject({code:200,body:{date,timezone:'Asia/Shanghai'}});
+    expect(feed.body.stories).toContainEqual(expect.objectContaining({
+      story_id:story,title:'Synthetic story',event_at_ms:1,
+      comic:{run_id:first.body.run_id,width:1024,height:1536}
+    }));
+    expect(feed.body.stories.some((x: {story_id:string})=>x.story_id===otherStory)).toBe(false);
+    const other = await getJson(await call('/daily',tokens.b));
+    expect(other.body.stories).toEqual([expect.objectContaining({story_id:otherStory,comic:null})]);
+    expect(await getJson(await call('/daily?date=2026-11-24',tokens.a))).toMatchObject({code:200,body:{stories:[]}});
+    expect((await call('/daily?date=2026-02-30',tokens.a)).status).toBe(400);
+    expect((await call('/daily?owner_id=owner-b',tokens.a)).status).toBe(400);
+    expect((await call('/daily')).status).toBe(401);
+    expect((await fetch(origin+'/daily',{method:'POST',headers:headers(tokens.a)})).status).toBe(405);
+  });
+
   it('coalesces concurrent identical run IDs and rejects changed inputs for that ID', async () => {
     const id = randomUUID();
     const requests = await Promise.all([generate({run_id:id}),generate({run_id:id})]);

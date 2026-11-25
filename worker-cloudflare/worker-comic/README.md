@@ -50,6 +50,7 @@ CLI 在提交前把 `run_id` 打到 stderr。默认每次生成新 UUID，**仅�
 
 | Request / 请求 | Behavior / 行为 |
 | --- | --- |
+| `GET /daily?date=YYYY-MM-DD` | Owner-scoped read-only feed from successful story runs; without `date`, selects the newest saved story date. At most 30 rows. Each story includes its latest successful comic, if any. Download with the existing authenticated image endpoint. / 只读返回登录用户的成功故事和各自最新的成功漫画；省略日期时选择最近有故事的一天，最多 30 条。成图继续走已有的鉴权下载接口。 |
 | `POST /comics` | JSON `{story_id,run_id,model?,photo_ids?,confirm_model_call:true}`. Waits for one attempt; new success 201, repeat 200 or in progress 202. / 等待一次手动生成；首次成功 201，复用 200 或正在生成 202。 |
 | `GET /comics?story_id=...` | Up to 50 runs, newest first, use `next_cursor` as `cursor`. / 倒序最多 50 条，后续传 `cursor`。 |
 | `GET /comics/:run_id` | State and immutable output metadata; no inference. / 查询状态和成图元数据，不推理。 |
