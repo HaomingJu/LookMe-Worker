@@ -131,6 +131,7 @@ python3 -I skills/deploy_cloudflare/scripts/generate_schema.py --watch
 
 ## 配置与部署边界
 
+- **代码上传到远端只允许 `git rebase`，禁止 `git merge`。** 保持线性历史；变基后如需 `--force-with-lease` 推送应先与用户确认，不擅自覆盖远端已推送的分支。
 - `wrangler.local.jsonc` 使用本地占位数据库 ID；`wrangler.jsonc` 的 `env.dev` 绑定真实开发资源。不得把本地 ID 用于远端。
 - 账号和数据库 ID 以当前配置与登录核对结果为准，不固定个人邮箱；换账号重新发现资源及签发凭据，不复制旧 Token 或删除旧资源。
 - 资源操作前读取 `skills/deploy_cloudflare/SKILL.md`；代码部署前读取 `skills/deploy_worker/SKILL.md`。上传客户端契约见 `worker-cloudflare/worker-upload/USAGE.md`，开发/管理说明见该目录 README。
