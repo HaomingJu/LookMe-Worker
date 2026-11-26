@@ -93,6 +93,10 @@ test('卡片与图片框统一大小，摘要截断但详情保留全文', async
   const sizes = await page.locator('.photo-card').evaluateAll(cards => cards.map(card => [card.clientWidth, card.clientHeight]));
   expect(new Set(sizes.map(size => size.join(':'))).size).toBe(1);
   expect(new Set(await page.locator('.photo-media').evaluateAll(media => media.map(node => node.clientHeight)))).toEqual(new Set([180]));
+  // 桌面照片网格固定 4 列：前 4 张同一行（offsetTop 相同），第 5 张换行。
+  const tops = await page.locator('.photo-card').evaluateAll(cards => cards.map(card => card.offsetTop));
+  expect(new Set(tops.slice(0, 4)).size).toBe(1);
+  expect(tops[4]).toBeGreaterThan(tops[0]);
   expect(await page.locator('.summary').nth(1).evaluate(node => node.scrollHeight > node.clientHeight)).toBe(true);
   await expect(page.locator('.badge').nth(2)).toHaveText('needs_review');
   await expect(page.locator('.summary').nth(2)).toHaveText('—');
