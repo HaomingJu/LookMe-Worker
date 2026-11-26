@@ -125,8 +125,8 @@
     ui['start-time'].disabled = dateOnly;
     ui['end-time'].disabled = dateOnly;
     ui['end-time'].setCustomValidity('');
-    ui['date-label'].textContent = photos ? '拍摄日期（留空显示全部）' : '故事日期（上传日）';
-    ui['zone-note'].textContent = photos ? '默认显示全部 · 筛选后仅显示匹配照片' : 'UTC+8 · 按上传日 · 只读历史结果';
+    ui['date-label'].textContent = photos ? '拍摄日期（留空显示全部）' : '上传日期（留空显示全部）';
+    ui['zone-note'].textContent = '默认显示全部 · 筛选后仅显示匹配记录';
   }
   function showLogin(error = '') {
     resetPhotos();
@@ -237,7 +237,7 @@
     renderUsers();
     updateView();
     if (!preserveRange) {
-      ui.date.value = state.view === 'photos' ? '' : dateValue(user.last_uploaded_at_ms ?? Date.now());
+      ui.date.value = '';  // 所有视图默认显示全部
       ui['start-time'].value = '00:00';
       ui['end-time'].value = '23:59';
     } else restoreRange();
@@ -246,10 +246,6 @@
   function switchView(view) {
     if (!state.user || state.view === view) return;
     state.view = view;
-    if (state.range) {
-      if (view === 'photos') state.range.date = null;  // 切回照片默认显示全部
-      else if (!state.range.date) state.range.date = dateValue(state.user.last_uploaded_at_ms ?? Date.now());
-    }
     restoreRange();
     renderUsers();
     updateView();
@@ -259,7 +255,7 @@
   function validRange() {
     ui['end-time'].setCustomValidity(state.view === 'photos' && ui['start-time'].value > ui['end-time'].value
       ? '结束时间不能早于开始时间。' : '');
-    ui.date.setCustomValidity(state.view !== 'photos' && !ui.date.value ? '故事/漫画视图需要日期。' : '');
+    ui.date.setCustomValidity('');
     return ui.filters.reportValidity();
   }
   function applyFilters() {
@@ -411,7 +407,8 @@
     state.loading = true; ui['more-stories'].disabled = true; ui['retry-stories'].hidden = true;
     notice('加载历史故事…');
     try {
-      const query = new URLSearchParams({ user: state.user.user_id, date: state.range.date });
+      const query = new URLSearchParams({ user: state.user.user_id });
+      if (state.range.date) query.set('date', state.range.date);
       if (more && state.storyCursor) query.set('cursor', state.storyCursor);
       const data = await json(`/api/stories?${query}`, { signal: controller.signal });
       if (epoch !== state.epoch) return;
@@ -419,7 +416,7 @@
       for (const run of data.runs) ui['story-list'].append(runCard(run, epoch));
       state.storyCount += data.runs.length; state.storyCursor = data.next_cursor;
       ui['more-stories'].hidden = !state.storyCursor;
-      ui['story-status'].textContent = state.storyCount ? `已加载 ${state.storyCount} 个生成批次 · 只读，不触发模型` : '该上传日期暂无已登记故事；过去仅保存在本地的结果不会自动导入。';
+      ui['story-status'].textContent = state.storyCount ? `已加载 ${state.storyCount} 个生成批次 · 只读，不触发模型` : '暂无已登记故事；过去仅保存在本地的结果不会自动导入。';
       notice();
     } catch (error) { fail(error, epoch); if (epoch === state.epoch) { ui['retry-stories'].hidden = false; ui['retry-stories'].dataset.more = String(more); } }
     finally { if (epoch === state.epoch) { state.loading = false; ui['more-stories'].disabled = false; } }
@@ -450,7 +447,8 @@
     state.loading = true; ui['more-comics'].disabled = true; ui['retry-comics'].hidden = true;
     notice('加载漫画…');
     try {
-      const query = new URLSearchParams({ user: state.user.user_id, date: state.range.date });
+      const query = new URLSearchParams({ user: state.user.user_id });
+      if (state.range.date) query.set('date', state.range.date);
       if (more && state.comicCursor) query.set('cursor', state.comicCursor);
       const data = await json(`/api/comics?${query}`, { signal: controller.signal });
       if (epoch !== state.epoch) return;
@@ -458,7 +456,7 @@
       for (const comic of data.comics) ui['comic-list'].append(comicCard(comic));
       state.comicCount += data.comics.length; state.comicCursor = data.next_cursor;
       ui['more-comics'].hidden = !state.comicCursor;
-      ui['comic-status'].textContent = state.comicCount ? `已加载 ${state.comicCount} 个漫画 · 只读，不触发模型` : '该上传日期暂无已登记漫画。';
+      ui['comic-status'].textContent = state.comicCount ? `已加载 ${state.comicCount} 个漫画 · 只读，不触发模型` : '暂无已登记漫画。';
       notice();
     } catch (error) { fail(error, epoch); if (epoch === state.epoch) { ui['retry-comics'].hidden = false; ui['retry-comics'].dataset.more = String(more); } }
     finally { if (epoch === state.epoch) { state.loading = false; ui['more-comics'].disabled = false; } }
@@ -510,7 +508,8 @@
 
   function card(photo, index) {
     const figure = element('figure', 'photo-card');
-    const heading = element('div', 'photo-time', timeFormat.format(photo.captured_at_ms));
+    const heading = element('div', 'photo-time',
+      photo.captured_at_ms == null ? '—' : `${dateValue(photo.captured_at_ms).replace(/-/g, '/')} ${timeFormat.format(photo.captured_at_ms)}`);
     heading.title = timestamp(photo.captured_at_ms);
     heading.append(element('span', '', `${photo.width} × ${photo.height}`));
     figure.append(heading);

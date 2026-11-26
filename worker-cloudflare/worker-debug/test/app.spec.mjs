@@ -386,8 +386,8 @@ test('故事网站展示原始模型、耗时、费用和四格，文字安全�
     story: route => route.fulfill({ json: { status: 'succeeded', result: storyResult } }),
   });
   await login(page); await page.locator('#stories-view').click();
-  await expect(page.locator('#date-label')).toHaveText('故事日期（上传日）');
-  await expect(page.locator('#date')).toHaveValue('2026-11-22');
+  await expect(page.locator('#date-label')).toHaveText('上传日期（留空显示全部）');
+  await expect(page.locator('#date')).toHaveValue('');
   await expect(page.locator('.story-run')).toHaveCount(1);
   await expect(page.locator('.story-run')).toContainText('@cf/qwen/qwen3.8-27b');
   await expect(page.locator('.story-run')).toContainText('89.00 秒');

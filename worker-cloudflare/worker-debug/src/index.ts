@@ -25,7 +25,9 @@ interface PhotoRow {
 const SESSION_TTL = 12 * 60 * 60 * 1000;
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const ENCODER = new TextEncoder();
-const PRIVATE = { 'Cache-Control': 'private, no-cache', Vary: 'Cookie' };
+// 只读文字结果：短时缓存 + ETag，减少重复请求；图片内容不可变，长时缓存。
+const CACHE_JSON = { 'Cache-Control': 'private, max-age=300', Vary: 'Cookie' };
+const CACHE_IMAGE = { 'Cache-Control': 'private, max-age=31536000, immutable', Vary: 'Cookie' };
 class HttpError extends Error {
   constructor(public status: number, public code: string) { super(code); }
 }
@@ -104,7 +106,7 @@ function matches(request: Request, etag: string) {
 async function cachedJSON(request: Request, data: unknown) {
   const body = JSON.stringify(data);
   const etag = `"${await hash(body)}"`;
-  const headers = { ...PRIVATE, ETag: etag, 'Content-Type': 'application/json' };
+  const headers = { ...CACHE_JSON, ETag: etag, 'Content-Type': 'application/json' };
   return matches(request, etag) ? new Response(null, { status: 304, headers }) : new Response(body, { headers });
 }
 function parameters(url: URL, allowed: string[]) {
@@ -179,14 +181,16 @@ async function timeline(request: Request, env: Env, url: URL) {
   return cachedJSON(request, { photos: result.results, total, offset: f.offset, limit: f.limit,
     timezone: 'Asia/Shanghai', date_basis: 'captured_at_ms' });
 }
-// 故事按生成时指定的上传日分组，不沿用照片时间线的captured_at筛选。
+// 故事按生成时指定的上传日分组，不沿用照片时间线的captured_at筛选；日期留空时显示该用户全部故事。
 async function storyRuns(request: Request, env: Env, url: URL) {
   parameters(url, ['user', 'date', 'cursor']);
   const user = owner(url.searchParams.get('user'));
   const userId = await resolveUser(env, user);
-  const date = url.searchParams.get('date') ?? '';
-  const timestamp = Date.parse(date + 'T00:00:00Z');
-  if (!/^20\d{2}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(timestamp) || new Date(timestamp).toISOString().slice(0, 10) !== date) throw new HttpError(400, 'invalid_date');
+  const date = url.searchParams.get('date');
+  if (date !== null) {
+    const t = Date.parse(date + 'T00:00:00Z');
+    if (!/^20\d{2}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(t) || new Date(t).toISOString().slice(0, 10) !== date) throw new HttpError(400, 'invalid_date');
+  }
   let after: { time: number; id: string } | null = null;
   const raw = url.searchParams.get('cursor');
   if (raw !== null) {
@@ -197,6 +201,9 @@ async function storyRuns(request: Request, env: Env, url: URL) {
       after = { time: parsed.time, id: parsed.id };
     } catch { throw new HttpError(400, 'invalid_cursor'); }
   }
+  const dated = date !== null;
+  const where = dated ? 'owner_id=? AND story_date=?' : 'owner_id=?';
+  const params: (string | number)[] = dated ? [userId, date!] : [userId];
   const result = await env.DB.prepare(`SELECT run_id,story_date,timezone,date_basis,story_version,analysis_version,model,status,created_at_ms,updated_at_ms,
     json_extract(response_json,'$.story_count') AS story_count,
     json_extract(response_json,'$.daily_summary') AS daily_summary,
@@ -207,10 +214,10 @@ async function storyRuns(request: Request, env: Env, url: URL) {
     json_extract(response_json,'$.usage') AS usage_json,
     json_extract(response_json,'$.cost') AS cost_json,
     json_extract(response_json,'$.model_timings') AS timings_json,
-    error_json FROM story_runs WHERE owner_id=? AND story_date=?
+    error_json FROM story_runs WHERE ${where}
     ${after ? 'AND (created_at_ms < ? OR (created_at_ms = ? AND run_id < ?))' : ''}
     ORDER BY created_at_ms DESC,run_id DESC LIMIT 11`)
-    .bind(userId, date, ...(after ? [after.time, after.time, after.id] : [])).all<Record<string, any>>();
+    .bind(...params, ...(after ? [after.time, after.time, after.id] : [])).all<Record<string, any>>();
   const rows = result.results.slice(0, 10);
   const runs = rows.map(row => {
     const { usage_json, cost_json, timings_json, error_json, ...rest } = row;
@@ -244,20 +251,22 @@ async function photo(request: Request, env: Env, url: URL, id: string) {
   const row = await env.DB.prepare(`SELECT object_key, sha256 FROM photos WHERE photo_id = ? ${user ? 'AND owner_id = ?' : ''}`)
     .bind(id, ...(user ? [user] : [])).first<{ object_key: string; sha256: string }>();
   if (!row) throw new HttpError(404, 'not_found');
-  const headers = { ...PRIVATE, ETag: `"${row.sha256}"`, 'Content-Type': 'image/jpeg' };
+  const headers = { ...CACHE_IMAGE, ETag: `"${row.sha256}"`, 'Content-Type': 'image/jpeg' };
   if (matches(request, headers.ETag)) return new Response(null, { status: 304, headers });
   const object = await env.PHOTOS.get(row.object_key);
   if (!object) throw new HttpError(404, 'photo_missing');
   return new Response(object.body, { headers });
 }
-// 漫画按 story_date（上传日）分组，只读展示成功结果，不触发模型。
+// 漫画按 story_date（上传日）分组，只读展示成功结果，不触发模型；日期留空时显示该用户全部漫画。
 async function comicRuns(request: Request, env: Env, url: URL) {
   parameters(url, ['user', 'date', 'cursor']);
   const user = owner(url.searchParams.get('user'));
   const userId = await resolveUser(env, user);
-  const date = url.searchParams.get('date') ?? '';
-  const timestamp = Date.parse(date + 'T00:00:00Z');
-  if (!/^20\d{2}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(timestamp) || new Date(timestamp).toISOString().slice(0, 10) !== date) throw new HttpError(400, 'invalid_date');
+  const date = url.searchParams.get('date');
+  if (date !== null) {
+    const t = Date.parse(date + 'T00:00:00Z');
+    if (!/^20\d{2}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(t) || new Date(t).toISOString().slice(0, 10) !== date) throw new HttpError(400, 'invalid_date');
+  }
   let after: { time: number; id: string } | null = null;
   const raw = url.searchParams.get('cursor');
   if (raw !== null) {
@@ -268,6 +277,9 @@ async function comicRuns(request: Request, env: Env, url: URL) {
       after = { time: parsed.time, id: parsed.id };
     } catch { throw new HttpError(400, 'invalid_cursor'); }
   }
+  const dated = date !== null;
+  const where = dated ? 'c.owner_id = ? AND r.story_date = ? AND c.status = \'succeeded\'' : 'c.owner_id = ? AND c.status = \'succeeded\'';
+  const params: (string | number)[] = dated ? [userId, date!] : [userId];
   const result = await env.DB.prepare(`SELECT c.run_id, c.story_id, s.title, s.summary, c.model, c.status,
     c.result_mime_type, c.result_byte_size, c.result_width, c.result_height, c.provider_request_id, c.created_at_ms,
     (SELECT MIN(COALESCE(p.captured_at_ms, p.uploaded_at_ms)) FROM json_each(s.source_photo_ids_json) j
@@ -275,10 +287,10 @@ async function comicRuns(request: Request, env: Env, url: URL) {
     FROM comic_runs c
     JOIN stories s ON s.owner_id = c.owner_id AND s.story_id = c.story_id
     JOIN story_runs r ON r.owner_id = c.owner_id AND r.run_id = s.run_id
-    WHERE c.owner_id = ? AND r.story_date = ? AND c.status = 'succeeded'
+    WHERE ${where}
     ${after ? 'AND (c.created_at_ms < ? OR (c.created_at_ms = ? AND c.run_id < ?))' : ''}
     ORDER BY c.created_at_ms DESC, c.run_id DESC LIMIT 11`)
-    .bind(userId, date, ...(after ? [after.time, after.time, after.id] : [])).all<Record<string, any>>();
+    .bind(...params, ...(after ? [after.time, after.time, after.id] : [])).all<Record<string, any>>();
   const rows = result.results.slice(0, 10);
   const comics = rows.map(row => ({ run_id: row.run_id, story_id: row.story_id, title: row.title, summary: row.summary,
     model: row.model, status: row.status, mime_type: row.result_mime_type, byte_size: row.result_byte_size,
@@ -296,7 +308,7 @@ async function comicImage(request: Request, env: Env, url: URL, id: string) {
     WHERE run_id = ? ${user ? 'AND owner_id = ?' : ''} AND status = 'succeeded'`)
     .bind(id, ...(user ? [user] : [])).first<{ result_object_key: string; result_sha256: string | null; result_mime_type: string | null }>();
   if (!row || !row.result_object_key) throw new HttpError(404, 'not_found');
-  const headers = { ...PRIVATE, ETag: `"${row.result_sha256 ?? ''}"`, 'Content-Type': row.result_mime_type ?? 'image/png' };
+  const headers = { ...CACHE_IMAGE, ETag: `"${row.result_sha256 ?? ''}"`, 'Content-Type': row.result_mime_type ?? 'image/png' };
   if (matches(request, headers.ETag)) return new Response(null, { status: 304, headers });
   const object = await env.COMICS.get(row.result_object_key);
   if (!object) throw new HttpError(404, 'comic_missing');

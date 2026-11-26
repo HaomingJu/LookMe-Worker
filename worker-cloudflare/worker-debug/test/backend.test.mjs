@@ -266,6 +266,10 @@ describe('拍摄时间筛选：本地真实 D1/R2', { concurrency: false }, () =
     assert.equal(list.body.comics[0].run_id, comicRunId);
     assert.equal(list.body.comics[0].title, '漫画故事');
     assert.equal(list.body.comics[0].width, 2);
+    const all = await fetchJSON(`/api/comics?user=${OWNER}`);
+    assert.equal(all.response.status, 200);
+    assert.equal(all.body.comics.length, 1);
+    assert.equal(all.body.comics[0].run_id, comicRunId);
     const img = await mf.dispatchFetch(`${BASE_URL}/comic/${comicRunId}?user=${OWNER}`, { headers: { Cookie: session } });
     assert.equal(img.status, 200);
     assert.equal(img.headers.get('Content-Type'), 'image/png');
@@ -303,6 +307,7 @@ describe('拍摄时间筛选：本地真实 D1/R2', { concurrency: false }, () =
     assert.equal(new Set([...first.body.runs,...second.body.runs].map(r=>r.run_id)).size,12);
     const wrong=await fetchJSON(`/api/stories?user=${OTHER_OWNER}&date=${uploadDay}&cursor=${encodeURIComponent(first.body.next_cursor)}`);assert.equal(wrong.response.status,400);
     assert.equal((await fetchJSON(`/api/stories?user=${OWNER}&date=${capturedDay}`)).body.runs.length,0);
+    const all=await fetchJSON(`/api/stories?user=${OWNER}`);assert.equal(all.response.status,200);assert.equal(all.body.runs.length,10);assert.equal(all.body.runs[0].model,'local-model');
   });
   it('故事详情保持鉴权和owner约束，支持ETag，未完成批次不伪装成功',async()=>{
     const {runId,result}=await seedRun(1);
