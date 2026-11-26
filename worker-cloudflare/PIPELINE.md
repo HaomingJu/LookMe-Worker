@@ -147,11 +147,11 @@ Cron由 `triggers.crons` 配置，当前 `* * * * *`，UTC每分钟运行一次�
 从仓库根目录，先只读预览，再明确确认：
 
 ```bash
-node worker-cloudflare/scripts/pipeline.mjs backfill --owner OWNER_UUID --version v2 --max-photos 14
-node worker-cloudflare/scripts/pipeline.mjs backfill --owner OWNER_UUID --version v2 --max-photos 14 --confirm-model-calls
+node worker-cloudflare/scripts/pipeline.mjs backfill --owner OWNER --version v2 --max-photos 14
+node worker-cloudflare/scripts/pipeline.mjs backfill --owner OWNER --version v2 --max-photos 14 --confirm-model-calls
 ```
 
-owner必须是有效UUID，目录固定为`photos/v1/{owner}/`，版本必须存在且通过锁校验，上限1–100。符合条件的数量超过上限时**全部拒绝**，不会悄悄挑选前N张。写入时再次检查状态，写入响应不确定后重跑也不会重复创建任务。新记录由已有Cron和Queue处理，会消耗真实推理额度；这是独立于部署命令的明确操作，不因部署而自动运行。
+owner 可为用户名或 UUID；目录固定为`photos/v1/{user_id}/`（用户名会先解析为 user_id），版本必须存在且通过锁校验，上限1–100。符合条件的数量超过上限时**全部拒绝**，不会悄悄挑选前N张。写入时再次检查状态，写入响应不确定后重跑也不会重复创建任务。新记录由已有Cron和Queue处理，会消耗真实推理额度；这是独立于部署命令的明确操作，不因部署而自动运行。
 
 ## 2026-11-21 dev应用与验收记录
 

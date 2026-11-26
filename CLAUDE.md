@@ -48,7 +48,7 @@ npm run build             # wrangler deploy --env dev --dry-run，不上线
 
 从仓库根目录执行 `node worker-cloudflare/scripts/pipeline.mjs check` / `plan`；明确确认后使用 `deploy-dev --confirm-dev`。两边package.json也提供config:check、profiles:lock、pipeline:plan、pipeline:deploy:dev。脚本仅用Wrangler修改远端配置，不创建未知资源或自动调用模型。
 
-明确授权的历史补跑用 `backfill --owner UUID --version v2 --max-photos N` 先预览，加 `--confirm-model-calls` 才通过Wrangler写Outbox。数量超过上限全部拒绝；任何已有同版本Outbox/分析记录都排除，不清除needs_review。发布和补跑是独立操作。
+明确授权的历史补跑用 `backfill --owner 用户名或UUID --version v2 --max-photos N` 先预览，加 `--confirm-model-calls` 才通过Wrangler写Outbox。数量超过上限全部拒绝；任何已有同版本Outbox/分析记录都排除，不清除needs_review。发布和补跑是独立操作。
 
 ### 测试运行方式
 
@@ -83,23 +83,27 @@ npm run build             # wrangler deploy --env dev --dry-run，不上线
 ## 故事与调试 Worker
 
 - `worker-cloudflare/worker-story/` 使用用户 Token 手动调用 `POST /stories`，读取指定用户当天摘要，不读 R2、不使用 Cron/Queue；0005迁移后先登记生成批次，模型成功且结果事务保存后返回JSON，故事有稳定story_id供后续漫画引用；故事自动数量、模型选择、版本锁、费用估算和错误诊断见该目录 README。当前新版本通过本地 mock 验证，不从历史 v4 验收推断新模型真实可用性。
-- `worker-cloudflare/worker-debug/` 提供受密码保护的只读照片/故事/漫画调试页，故事按上传日读取D1持久化批次并显示模型、耗时、用量和费用估算；漫画按story_id/日期读取comic_runs并经COMICS私有绑定展示模型与成图元信息；单独配置与发布，不与上传自动分析管道混合部署。
+- `worker-cloudflare/worker-debug/` 提供受密码保护的只读照片/故事/漫画调试页，故事与漫画按上传日读取D1持久化批次并显示模型、耗时、用量和费用估算，漫画图从私有COMICS桶读取；侧栏直接显示用户名，点击展开照片/故事/漫画视图；单独配置与发布，不与上传自动分析管道混合部署。
 - `worker-comic/` runs only on explicit CLI requests and preserves multiple results per story in D1/private R2. / 仅 CLI 主动触发；同一故事的多次结果分别保存在 D1/私有 R2。不参与自动部署或排队。见 [双语说明](worker-cloudflare/worker-comic/README.md)。
 - 各目录有自己的 `package.json`；从仓库根目录运行 npm 命令时使用 `npm --prefix worker-cloudflare/<项目目录> ...`，避免根目录 ENOENT。故事结果、秘密文件、Wrangler 缓存不提交 Git。
 
 ## 本地身份与管理工具
 
-应用本地迁移后，通过 `scripts/users.mjs` 创建用户并签发 Token，开发服务器无需共享 Secret：
+应用本地迁移后，通过 `scripts/users.mjs` 创建用户并签发 Token，开发服务器无需共享 Secret。用户 `user_id` 仍为服务端 UUID 主键，另有人类可记的唯一 `username`（1–64 位 `[A-Za-z0-9_-]`，唯一性不区分大小写）；`--user` 统一接受用户名或 user_id：
 
 ```bash
-npm run users -- create-user --local
-npm run users -- issue-token --local --user USER_ID --out /已存在的受限目录/new.token
+npm run users -- create-user --local --username USERNAME
+npm run users -- list-users --local
+npm run users -- show-user --local --user USERNAME
+npm run users -- rename-user --local --user USERNAME --username NEW_NAME
+npm run users -- delete-user --local --user USERNAME
+npm run users -- issue-token --local --user USERNAME --out /已存在的受限目录/new.token
 npm run users -- revoke-token --local --token-id TOKEN_ID
-npm run users -- disable-user --local --user USER_ID
-npm run users -- enable-user --local --user USER_ID
+npm run users -- disable-user --local --user USERNAME
+npm run users -- enable-user --local --user USERNAME
 ```
 
-签发默认 90 天，`--days` 支持 1–365。Token 文件必须在仓库外、尚不存在，父目录归当前用户且不允许组/其他用户写入（可为 0700/0750/0755 等），文件权限 0600。先保存明文文件再登记哈希；失败不删除文件或直接重试，应检查远端是否已写成功。
+签发默认 90 天，`--days` 支持 1–365。Token 文件必须在仓库外、尚不存在，父目录归当前用户且不允许组/其他用户写入（可为 0700/0750/0755 等），文件权限 0600。先保存明文文件再登记哈希；失败不删除文件或直接重试，应检查远端是否已写成功。删除用户仅在该用户无任何关联 Token、照片、任务、故事或漫画记录时执行。
 
 CLI 必须显式选择 `--local` 或 `--remote`；后者固定 `dev`。远端 SQL 使用 `--command --json` 获取 RETURNING 行，本地使用受限临时 SQL 文件。**远端 `--file --json` 走导入 API，会夹带进度并返回汇总，而非查询行**，不能据解析失败断言 INSERT 未执行。
 
@@ -114,6 +118,7 @@ CLI 必须显式选择 `--local` 或 `--remote`；后者固定 `dev`。远端 SQ
 - `0005_story_runs.sql`：故事生成批次、输入照片/摘要快照、独立story_id及四格JSON；模型前登记、成功事务落库，失败不自动重调。2026-11-23已获准应用到dev并发布story/debug；后续迁移/发布仍须另行授权，之后另经授权完成一次Qwen/v5真实生成并验证D1持久化；不据此授权后续模型调用。
 
 - `0006_comic_runs.sql` adds owner-scoped comic generation history only. / 只新增按用户隔离的手动漫画历史表，不改旧任务、不回填。
+- `0007_user_usernames.sql` 为 users 增加可空唯一 username（与 user_id 1:1，大小写不敏感）；历史补建用户为 NULL 待 rename-user 命名，不自动生成用户名。
 
 `skills/deploy_cloudflare/references/schema.sql` 是当前完整结构快照，**不是应覆盖到 0001 的迁移文件**。修改数据库需新增版本化迁移，并同步完整快照。从仓库根目录重新生成可视化：
 

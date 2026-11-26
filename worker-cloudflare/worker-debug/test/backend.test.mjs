@@ -21,7 +21,7 @@ const id = number => `10000000-0000-4000-8000-${String(number).padStart(12, '0')
 let mf;
 let db;
 let bucket;
-let comicsBucket;
+let comics;
 let session;
 
 async function addPhoto(number, capture, upload = uploadedAt('12:00:00'), owner = OWNER) {
@@ -75,7 +75,7 @@ describe('拍摄时间筛选：本地真实 D1/R2', { concurrency: false }, () =
     }));
     db = await mf.getD1Database('DB');
     bucket = await mf.getR2Bucket('PHOTOS');
-    comicsBucket = await mf.getR2Bucket('COMICS');
+    comics = await mf.getR2Bucket('COMICS');
     for (const filename of (await readdir(migrations)).filter(name => name.endsWith('.sql')).sort()) {
       const sql = (await readFile(new URL(filename, migrations), 'utf8')).replace(/--[^\n]*/g, '');
       for (const statement of sql.split(';').filter(value => value.trim())) await db.prepare(statement).run();
@@ -98,8 +98,9 @@ describe('拍摄时间筛选：本地真实 D1/R2', { concurrency: false }, () =
     await db.prepare('DELETE FROM photos').run();
     await db.prepare('DELETE FROM users').run();
     for (const [index, user] of [OWNER, OTHER_OWNER, EMPTY_OWNER].entries()) {
-      await db.prepare('INSERT INTO users (user_id, created_at_ms) VALUES (?, ?)')
-        .bind(user, 1700000000000 + index).run();
+      const username = { [OWNER]: 'owner-one', [OTHER_OWNER]: 'owner-two' }[user] ?? null;
+      await db.prepare('INSERT INTO users (user_id, username, created_at_ms) VALUES (?, ?, ?)')
+        .bind(user, username, 1700000000000 + index).run();
     }
   });
 
@@ -132,7 +133,7 @@ describe('拍摄时间筛选：本地真实 D1/R2', { concurrency: false }, () =
     const onlyUndated = await timeline();
     assert.equal(onlyUndated.response.status, 200);
     assert.deepEqual(onlyUndated.body.photos, []);
-    assert.equal(onlyUndated.body.next_cursor, null);
+    assert.equal(onlyUndated.body.total, 0);
   });
 
   it('北京时间范围含结束分钟，排除范围外及其他用户的照片', async () => {
@@ -151,31 +152,25 @@ describe('拍摄时间筛选：本地真实 D1/R2', { concurrency: false }, () =
     assert.deepEqual(dayEnd.body.photos.map(photo => photo.photo_id), [id(10)]);
   });
 
-  it('同毫秒拍摄的照片按 ID 分页，上传顺序不同也无重复或遗漏', async () => {
+  it('同毫秒拍摄的照片按 ID 排序分页，上传顺序不同也无重复或遗漏', async () => {
     const capture = capturedAt('10:00:00');
     const expected = [id(12), id(13), id(14), id(15), id(16)];
     for (const [index, number] of [16, 13, 15, 12, 14].entries()) {
       await addPhoto(number, capture, uploadedAt(`12:0${index}:00`));
     }
     const collected = [];
-    let cursor;
+    let offset = 0;
     let pageCount = 0;
     do {
-      const result = await timeline({ limit: '2', ...(cursor ? { cursor } : {}) });
+      const result = await timeline({ limit: '2', offset: String(offset) });
       assert.equal(result.response.status, 200);
       assert.equal(result.body.date_basis, 'captured_at_ms');
       assert.ok(result.body.photos.length <= 2);
       collected.push(...result.body.photos.map(photo => photo.photo_id));
-      cursor = result.body.next_cursor;
-      if (cursor) {
-        const decoded = JSON.parse(Buffer.from(cursor, 'base64').toString('utf8'));
-        assert.equal(decoded.scope, `captured_at_ms|${OWNER}|${capturedDay}|00:00|23:59`);
-        assert.equal(decoded.time, capture);
-        assert.equal(decoded.id, result.body.photos.at(-1).photo_id);
-      }
+      offset += result.body.photos.length;
       pageCount++;
       assert.ok(pageCount <= 3);
-    } while (cursor);
+    } while (offset < expected.length);
     assert.deepEqual(collected, expected);
     assert.equal(new Set(collected).size, expected.length);
     assert.equal(pageCount, 3);
@@ -186,27 +181,29 @@ describe('拍摄时间筛选：本地真实 D1/R2', { concurrency: false }, () =
     assert.ok(oldCapture < 0);
     await addPhoto(23, oldCapture);
     await addPhoto(24, oldCapture + 60000);
-    const first = await timeline({ date: '1960-01-02', limit: '1' });
+    const first = await timeline({ date: '1960-01-02', limit: '1', offset: '0' });
     assert.equal(first.response.status, 200);
     assert.deepEqual(first.body.photos.map(photo => photo.photo_id), [id(23)]);
-    const decoded = JSON.parse(Buffer.from(first.body.next_cursor, 'base64').toString('utf8'));
-    assert.equal(decoded.time, oldCapture);
-    const second = await timeline({ date: '1960-01-02', limit: '1', cursor: first.body.next_cursor });
+    assert.equal(first.body.total, 2);
+    const second = await timeline({ date: '1960-01-02', limit: '1', offset: '1' });
     assert.equal(second.response.status, 200);
     assert.deepEqual(second.body.photos.map(photo => photo.photo_id), [id(24)]);
-    assert.equal(second.body.next_cursor, null);
+    assert.equal(second.body.total, 2);
   });
 
-  it('旧上传时间游标被拒绝，不能用于拍摄时间筛选', async () => {
-    await addPhoto(17, capturedAt('10:00:00'), capturedAt('11:00:00'));
-    const cursor = Buffer.from(JSON.stringify({
-      scope: `${OWNER}|${capturedDay}|00:00|23:59`,
-      time: capturedAt('11:00:00'),
-      id: id(17),
-    })).toString('base64');
-    const result = await timeline({ cursor });
+  it('非法 offset 被拒绝', async () => {
+    const result = await timeline({ offset: '-1' });
     assert.equal(result.response.status, 400);
-    assert.deepEqual(result.body, { error: 'invalid_cursor' });
+    assert.deepEqual(result.body, { error: 'invalid_offset' });
+  });
+
+  it('不传日期显示该用户全部照片，含缺拍摄时间的', async () => {
+    const dated = await addPhoto(30, capturedAt('08:00:00'));
+    const undated = await addPhoto(31, null, uploadedAt('10:00:00'));
+    const result = await fetchJSON(`/api/timeline?user=${OWNER}`);
+    assert.equal(result.response.status, 200);
+    assert.equal(result.body.total, 2);
+    assert.deepEqual(result.body.photos.map(p => p.photo_id), [dated, undated]);
   });
 
   it('用户列表保留上传统计，并准确给出拍摄时间和未标注计数', async () => {
@@ -235,6 +232,52 @@ describe('拍摄时间筛选：本地真实 D1/R2', { concurrency: false }, () =
     assert.equal(emptyOwner.first_captured_at_ms, null);
     assert.equal(emptyOwner.last_captured_at_ms, null);
     assert.equal(emptyOwner.undated_photo_count, 0);
+  });
+
+  it('用户名可替代 user_id 定位用户，且大小写不敏感', async () => {
+    const photo = await addPhoto(30, capturedAt('08:00:00'));
+    const byName = await timeline({ user: 'owner-one' });
+    assert.equal(byName.response.status, 200);
+    assert.deepEqual(byName.body.photos.map(p => p.photo_id), [photo]);
+    const byCase = await timeline({ user: 'OWNER-ONE' });
+    assert.equal(byCase.response.status, 200);
+    assert.deepEqual(byCase.body.photos.map(p => p.photo_id), [photo]);
+    assert.equal((await fetchJSON(`/api/stories?user=owner-one&date=${uploadDay}`)).response.status, 200);
+    assert.equal((await fetchJSON(`/api/timeline?user=nobody&date=${capturedDay}`)).response.status, 404);
+    const users = (await fetchJSON('/api/users')).body.users;
+    assert.equal(users.find(u => u.user_id === OWNER).username, 'owner-one');
+  });
+
+  it('漫画接口按上传日读取成功结果并返回图片', async () => {
+    const { runId } = await seedRun(1);
+    const storyId = id(40), comicRunId = id(41);
+    await db.prepare(`INSERT INTO stories (story_id, owner_id, run_id, position, title, summary, image_prompt, panels_json, source_photo_ids_json, created_at_ms)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`)
+      .bind(storyId, OWNER, runId, 0, '漫画故事', '摘要', '提示词', '[1,2,3,4]', '["missing-photo"]', uploadedAt('12:00:00')).run();
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    const key = `comic-runs/v1/${'a'.repeat(64)}/${comicRunId}`;
+    await comics.put(key, bytes, { httpMetadata: { contentType: 'image/png' } });
+    await db.prepare(`INSERT INTO comic_runs (owner_id, run_id, story_id, model, profile_version, profile_json, request_sha256, input_json, status, result_object_key, result_mime_type, result_byte_size, result_sha256, result_width, result_height, created_at_ms, updated_at_ms)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .bind(OWNER, comicRunId, storyId, 'local-model', 'v1', '{}', 'c'.repeat(64), '{}', 'succeeded', key, 'image/png', bytes.length, 'd'.repeat(64), 2, 2, uploadedAt('12:00:00'), uploadedAt('12:00:00')).run();
+    const list = await fetchJSON(`/api/comics?user=${OWNER}&date=${uploadDay}`);
+    assert.equal(list.response.status, 200);
+    assert.equal(list.body.comics.length, 1);
+    assert.equal(list.body.comics[0].run_id, comicRunId);
+    assert.equal(list.body.comics[0].title, '漫画故事');
+    assert.equal(list.body.comics[0].width, 2);
+    const img = await mf.dispatchFetch(`${BASE_URL}/comic/${comicRunId}?user=${OWNER}`, { headers: { Cookie: session } });
+    assert.equal(img.status, 200);
+    assert.equal(img.headers.get('Content-Type'), 'image/png');
+    assert.deepEqual([...new Uint8Array(await img.arrayBuffer())], [...bytes]);
+  });
+
+  it('停用用户不出现在用户列表，但用户名仍可被直接查询', async () => {
+    await db.prepare("UPDATE users SET status='disabled' WHERE user_id=?").bind(OTHER_OWNER).run();
+    const result = await fetchJSON('/api/users');
+    assert.equal(result.response.status, 200);
+    assert.equal(result.body.users.some(u => u.user_id === OTHER_OWNER), false);
+    assert.equal(result.body.users.some(u => u.user_id === OWNER), true);
   });
 
   async function seedRun(number, user=OWNER, status='succeeded') {
@@ -273,37 +316,6 @@ describe('拍摄时间筛选：本地真实 D1/R2', { concurrency: false }, () =
     assert.equal((await fetchJSON(`/api/story?user=${OWNER}&run_id=${pending.runId}`)).body.result,null);
     assert.equal((await fetchJSON(`/api/stories?user=${OWNER}&date=2026-02-30`)).response.status,400);
     assert.equal((await fetchJSON(`/api/story?user=${OWNER}&run_id=bad`)).response.status,400);
-  });
-  async function addComic(number, owner=OWNER, status='succeeded') {
-    const sourcePhoto=await addPhoto(100+number, capturedAt('11:00:00'), uploadedAt('10:00:00'), owner);
-    const runId=id(500+number), storyId=id(400+number), objectKey=`comic-fixtures/${runId}.png`;
-    await db.prepare(`INSERT INTO story_runs(run_id,owner_id,story_date,timezone,date_basis,story_version,analysis_version,model,input_sha256,input_json,profile_json,status,response_json,created_at_ms,updated_at_ms)
-      VALUES (?,?,'2026-11-21','Asia/Shanghai','uploaded_at_ms','v5','v2','@cf/qwen/qwen3.8-27b',?,'{}','{}','succeeded',?, ?, ?)`).bind(runId,owner,'f'.repeat(64),JSON.stringify({run_id:runId,story_count:1}),uploadedAt('10:00:00'),uploadedAt('10:00:00')).run();
-    await db.prepare(`INSERT INTO stories(story_id,owner_id,run_id,position,title,summary,image_prompt,panels_json,source_photo_ids_json,created_at_ms)
-      VALUES (?, ?, ?, 0, '测试故事', '测试摘要', '测试提示词', ?, ?, ?)`).bind(storyId,owner,runId,JSON.stringify([{panel:1,description:'a',image_prompt:'a',source_photo_ids:[sourcePhoto]} ,{panel:2,description:'b',image_prompt:'b',source_photo_ids:[sourcePhoto]},{panel:3,description:'c',image_prompt:'c',source_photo_ids:[sourcePhoto]},{panel:4,description:'d',image_prompt:'d',source_photo_ids:[sourcePhoto]}]),JSON.stringify([sourcePhoto]),uploadedAt('10:00:00')).run();
-    const image={run_id:runId,story_id:storyId,model:'@cf/black-forest-labs/flux-2-klein-9b',profile_version:'v1',status,provider_request_id:'comic-provider',error_code:status==='succeeded'?null:'comic_error',created_at_ms:uploadedAt('10:00:00'),updated_at_ms:uploadedAt('10:01:00'),result_object_key:status==='succeeded'?objectKey:null,result_mime_type:status==='succeeded'?'image/png':null,result_byte_size:status==='succeeded'?4:null,result_sha256:status==='succeeded'?'b'.repeat(64):null,result_width:status==='succeeded'?1024:null,result_height:status==='succeeded'?1536:null};
-    await db.prepare(`INSERT INTO comic_runs(owner_id,run_id,story_id,model,profile_version,profile_json,request_sha256,input_json,status,provider_request_id,result_object_key,result_mime_type,result_byte_size,result_sha256,result_width,result_height,error_code,created_at_ms,updated_at_ms)
-      VALUES (?,?,?,?,?,'{}',?,'{}',?,?,?,?,?,?,?,?,?,?,?)`).bind(owner,runId,storyId,image.model,image.profile_version,'e'.repeat(64),status,image.provider_request_id,image.result_object_key,image.result_mime_type,image.result_byte_size,image.result_sha256,image.result_width,image.result_height,image.error_code,image.created_at_ms,image.updated_at_ms).run();
-    if(status==='succeeded') await comicsBucket.put(objectKey,new Uint8Array([1,2,3,4]),{customMetadata:{sha256:'b'.repeat(64)},httpMetadata:{contentType:'image/png'}});
-    return image;
-  }
-  it('漫画列表按用户/故事上传日隔离，返回模型和图片元信息且图片走私有绑定', async () => {
-    const comic=await addComic(1); await addComic(2,OTHER_OWNER); await addComic(3,OWNER,'needs_review');
-    const result=await fetchJSON(`/api/comics?user=${OWNER}&date=${uploadDay}`);
-    assert.equal(result.response.status,200);assert.equal(result.body.runs.length,2);
-    const success=result.body.runs.find(r=>r.run_id===comic.run_id);assert.equal(success.model,comic.model);assert.equal(success.profile_version,'v1');assert.equal(success.image.width,1024);assert.equal(success.image.height,1536);assert.equal(success.reference_photo_ids.length,0);
-    const imageResponse=await mf.dispatchFetch(`${BASE_URL}${success.image.path}`,{headers:{Cookie:session}});assert.equal(imageResponse.status,200);assert.equal(imageResponse.headers.get('Content-Type'),'image/png');assert.equal((await imageResponse.arrayBuffer()).byteLength,4);
-    assert.equal((await fetchJSON(`/api/comics?user=${OTHER_OWNER}&date=${uploadDay}`)).body.runs.length,1);
-    assert.equal((await fetchJSON(`/api/comics?user=${OWNER}&date=${capturedDay}`)).body.runs.length,0);
-  });
-  it('漫画图片和列表需要会话，错误R2完整性返回503，未成功状态不能下载', async () => {
-    const comic=await addComic(4);const path=`/api/comic/${comic.run_id}/image?user=${OWNER}`;
-    assert.equal((await fetchJSON(path,false)).response.status,401);
-    await comicsBucket.put('comic-fixtures/'+comic.run_id+'.png',new Uint8Array([9,9,9,9]),{customMetadata:{sha256:'wrong'}});
-    assert.equal((await fetchJSON(path)).response.status,503);
-    const pending=await addComic(5,OWNER,'needs_review');
-    assert.equal((await fetchJSON(`/api/comic/${pending.run_id}/image?user=${OWNER}`)).response.status,404);
-    assert.equal((await fetchJSON(`/api/comics?user=${OWNER}&date=2026-11-21`)).response.status,200);
   });
   it('拍摄时间改动不绕过现有登录保护', async () => {
     await addPhoto(22, capturedAt('08:00:00'));

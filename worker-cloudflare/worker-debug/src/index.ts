@@ -118,83 +118,82 @@ function owner(value: string | null) {
   if (!value || !/^[A-Za-z0-9_-]{1,128}$/.test(value)) throw new HttpError(400, 'invalid_user');
   return value;
 }
+// 把 ?user= 的取值解析为 user_id：优先精确匹配 user_id，再按用户名（大小写不敏感）查找。
+async function resolveUser(env: Env, value: string | null) {
+  if (!value || !/^[A-Za-z0-9_-]{1,128}$/.test(value)) throw new HttpError(400, 'invalid_user');
+  let row = await env.DB.prepare('SELECT user_id FROM users WHERE user_id = ?').bind(value).first<{ user_id: string }>();
+  if (!row) row = await env.DB.prepare('SELECT user_id FROM users WHERE username = ? COLLATE NOCASE').bind(value).first<{ user_id: string }>();
+  if (!row) throw new HttpError(404, 'user_not_found');
+  return row.user_id;
+}
 function filters(url: URL) {
-  parameters(url, ['user', 'date', 'start', 'end', 'limit', 'cursor']);
+  parameters(url, ['user', 'date', 'start', 'end', 'limit', 'offset']);
   const user = owner(url.searchParams.get('user'));
-  const date = url.searchParams.get('date') ?? '';
+  const date = url.searchParams.get('date');
   const start = url.searchParams.get('start') ?? '00:00';
   const end = url.searchParams.get('end') ?? '23:59';
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date < '0001-01-01' || date > '9998-12-31') throw new HttpError(400, 'invalid_date');
-  const midnight = Date.parse(`${date}T00:00:00Z`);
-  if (!Number.isFinite(midnight) || new Date(midnight).toISOString().slice(0, 10) !== date) throw new HttpError(400, 'invalid_date');
-  const time = /^([01]\d|2[0-3]):[0-5]\d$/;
-  if (!time.test(start) || !time.test(end) || start > end) throw new HttpError(400, 'invalid_time_range');
-  const from = Date.parse(`${date}T${start}:00+08:00`);
-  const to = Date.parse(`${date}T${end}:00+08:00`) + 60000;
-  const size = url.searchParams.get('limit') ?? '12';
+  let from: number | null = null;
+  let to: number | null = null;
+  if (date !== null) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date < '0001-01-01' || date > '9998-12-31') throw new HttpError(400, 'invalid_date');
+    const midnight = Date.parse(`${date}T00:00:00Z`);
+    if (!Number.isFinite(midnight) || new Date(midnight).toISOString().slice(0, 10) !== date) throw new HttpError(400, 'invalid_date');
+    const time = /^([01]\d|2[0-3]):[0-5]\d$/;
+    if (!time.test(start) || !time.test(end) || start > end) throw new HttpError(400, 'invalid_time_range');
+    from = Date.parse(`${date}T${start}:00+08:00`);
+    to = Date.parse(`${date}T${end}:00+08:00`) + 60000;
+  }
+  const size = url.searchParams.get('limit') ?? '24';
   if (!/^\d+$/.test(size) || Number(size) < 1 || Number(size) > 50) throw new HttpError(400, 'invalid_limit');
-  return { user, date, start, end, from, to, limit: Number(size) };
+  const offset = url.searchParams.get('offset') ?? '0';
+  if (!/^\d+$/.test(offset) || Number(offset) > 1000000) throw new HttpError(400, 'invalid_offset');
+  return { user, date, from, to, limit: Number(size), offset: Number(offset) };
 }
 async function users(request: Request, env: Env) {
-  const result = await env.DB.prepare(`SELECT u.user_id, u.status, count(p.photo_id) AS photo_count,
+  const result = await env.DB.prepare(`SELECT u.user_id, u.username, u.status, count(p.photo_id) AS photo_count,
     min(p.uploaded_at_ms) AS first_uploaded_at_ms, max(p.uploaded_at_ms) AS last_uploaded_at_ms,
     min(p.captured_at_ms) AS first_captured_at_ms, max(p.captured_at_ms) AS last_captured_at_ms,
     sum(CASE WHEN p.photo_id IS NOT NULL AND p.captured_at_ms IS NULL THEN 1 ELSE 0 END) AS undated_photo_count
-    FROM users u LEFT JOIN photos p ON p.owner_id = u.user_id GROUP BY u.user_id ORDER BY u.created_at_ms, u.user_id`).all();
+    FROM users u LEFT JOIN photos p ON p.owner_id = u.user_id
+    WHERE u.status = 'active'
+    GROUP BY u.user_id ORDER BY u.created_at_ms, u.user_id`).all();
   return cachedJSON(request, { users: result.results });
 }
 async function timeline(request: Request, env: Env, url: URL) {
   const f = filters(url);
-  if (!await env.DB.prepare('SELECT user_id FROM users WHERE user_id = ?').bind(f.user).first()) throw new HttpError(404, 'user_not_found');
-  const scope = `captured_at_ms|${f.user}|${f.date}|${f.start}|${f.end}`;
-  const raw = url.searchParams.get('cursor');
-  let after: { time: number; id: string } | null = null;
-  if (raw !== null) {
-    try {
-      if (raw.length > 1024) throw new Error();
-      const cursor = JSON.parse(atob(raw));
-      if (cursor.scope !== scope || !Number.isSafeInteger(cursor.time) || cursor.time < f.from || cursor.time >= f.to || !UUID.test(cursor.id)) throw new Error();
-      after = { time: cursor.time, id: cursor.id };
-    } catch { throw new HttpError(400, 'invalid_cursor'); }
-  }
-  // 同毫秒照片以 ID 收敛分页，摘要版本不参与照片排序或页大小。
+  const userId = await resolveUser(env, f.user);
+  const dated = f.date !== null;
+  const where = dated ? 'p.owner_id = ? AND p.captured_at_ms >= ? AND p.captured_at_ms < ?' : 'p.owner_id = ?';
+  const params = dated ? [userId, f.from!, f.to!] : [userId];
+  const total = (await env.DB.prepare(`SELECT COUNT(*) AS n FROM photos p WHERE ${where}`).bind(...params).first<{ n: number }>())?.n ?? 0;
+  // 有日期筛选时按拍摄时间排序；显示全部时缺拍摄时间的照片回退到上传时间参与排序。
+  const order = dated ? 'p.captured_at_ms ASC, p.photo_id ASC' : 'COALESCE(p.captured_at_ms, p.uploaded_at_ms) ASC, p.photo_id ASC';
   const result = await env.DB.prepare(`SELECT p.photo_id, p.uploaded_at_ms, p.captured_at_ms, p.captured_at_source,
     p.width, p.height, p.byte_size, p.source, a.result_text, a.status AS analysis_status, a.analysis_version, a.model
     FROM photos p LEFT JOIN photo_analyses a ON a.photo_id = p.photo_id AND a.analysis_version = (
       SELECT chosen.analysis_version FROM photo_analyses chosen WHERE chosen.photo_id = p.photo_id
       ORDER BY (chosen.status = 'succeeded') DESC, chosen.updated_at_ms DESC, chosen.analysis_version DESC LIMIT 1)
-    WHERE p.owner_id = ? AND p.captured_at_ms >= ? AND p.captured_at_ms < ?
-    ${after ? 'AND (p.captured_at_ms > ? OR (p.captured_at_ms = ? AND p.photo_id > ?))' : ''}
-    ORDER BY p.captured_at_ms ASC, p.photo_id ASC LIMIT ?`)
-    .bind(f.user, f.from, f.to, ...(after ? [after.time, after.time, after.id] : []), f.limit + 1).all<PhotoRow>();
-  const photos = result.results.slice(0, f.limit);
-  const last = photos.at(-1);
-  const next = result.results.length > f.limit && last ? btoa(JSON.stringify({ scope, time: last.captured_at_ms, id: last.photo_id })) : null;
-  return cachedJSON(request, { photos, next_cursor: next, timezone: 'Asia/Shanghai', date_basis: 'captured_at_ms', story: { status: 'separate_endpoint', endpoint: '/api/stories' } });
-}
-interface ComicRow {
-  run_id: string; story_id: string; story_title: string;
-  model: string; profile_version: string; status: string; provider_request_id: string | null;
-  error_code: string | null; created_at_ms: number; updated_at_ms: number;
-  reference_photo_ids_json: string | null; result_mime_type: string | null; result_byte_size: number | null;
-  result_sha256: string | null; result_width: number | null; result_height: number | null;
-  input_json: string;
+    WHERE ${where}
+    ORDER BY ${order} LIMIT ? OFFSET ?`)
+    .bind(...params, f.limit, f.offset).all<PhotoRow>();
+  return cachedJSON(request, { photos: result.results, total, offset: f.offset, limit: f.limit,
+    timezone: 'Asia/Shanghai', date_basis: 'captured_at_ms' });
 }
 // 故事按生成时指定的上传日分组，不沿用照片时间线的captured_at筛选。
 async function storyRuns(request: Request, env: Env, url: URL) {
   parameters(url, ['user', 'date', 'cursor']);
   const user = owner(url.searchParams.get('user'));
+  const userId = await resolveUser(env, user);
   const date = url.searchParams.get('date') ?? '';
   const timestamp = Date.parse(date + 'T00:00:00Z');
   if (!/^20\d{2}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(timestamp) || new Date(timestamp).toISOString().slice(0, 10) !== date) throw new HttpError(400, 'invalid_date');
-  if (!await env.DB.prepare('SELECT user_id FROM users WHERE user_id=?').bind(user).first()) throw new HttpError(404, 'user_not_found');
   let after: { time: number; id: string } | null = null;
   const raw = url.searchParams.get('cursor');
   if (raw !== null) {
     try {
       if (raw.length > 1024) throw new Error();
       const parsed = JSON.parse(atob(raw));
-      if (parsed.user !== user || parsed.date !== date || !Number.isSafeInteger(parsed.time) || parsed.time < 0 || !UUID.test(parsed.id)) throw new Error();
+      if (parsed.user !== userId || parsed.date !== date || !Number.isSafeInteger(parsed.time) || parsed.time < 0 || !UUID.test(parsed.id)) throw new Error();
       after = { time: parsed.time, id: parsed.id };
     } catch { throw new HttpError(400, 'invalid_cursor'); }
   }
@@ -211,7 +210,7 @@ async function storyRuns(request: Request, env: Env, url: URL) {
     error_json FROM story_runs WHERE owner_id=? AND story_date=?
     ${after ? 'AND (created_at_ms < ? OR (created_at_ms = ? AND run_id < ?))' : ''}
     ORDER BY created_at_ms DESC,run_id DESC LIMIT 11`)
-    .bind(user, date, ...(after ? [after.time, after.time, after.id] : [])).all<Record<string, any>>();
+    .bind(userId, date, ...(after ? [after.time, after.time, after.id] : [])).all<Record<string, any>>();
   const rows = result.results.slice(0, 10);
   const runs = rows.map(row => {
     const { usage_json, cost_json, timings_json, error_json, ...rest } = row;
@@ -223,69 +222,25 @@ async function storyRuns(request: Request, env: Env, url: URL) {
       error_code: error?.error ?? null };
   });
   const last = rows.at(-1);
-  return cachedJSON(request, { runs, next_cursor: result.results.length > 10 && last ? btoa(JSON.stringify({ user, date, time: last.created_at_ms, id: last.run_id })) : null,
+  return cachedJSON(request, { runs, next_cursor: result.results.length > 10 && last ? btoa(JSON.stringify({ user: userId, date, time: last.created_at_ms, id: last.run_id })) : null,
     timezone: 'Asia/Shanghai', date_basis: 'uploaded_at_ms' });
 }
 async function storyDetail(request: Request, env: Env, url: URL) {
   parameters(url, ['user', 'run_id']);
   const user = owner(url.searchParams.get('user')), id = url.searchParams.get('run_id') ?? '';
+  const userId = await resolveUser(env, user);
   if (!UUID.test(id)) throw new HttpError(400, 'invalid_run_id');
   // 调试密码为管理员只读权限；仍用owner/run_id限定查询，避免选择用户串数据。
   const row = await env.DB.prepare('SELECT status,response_json,error_json FROM story_runs WHERE owner_id=? AND run_id=?')
-    .bind(user, id).first<{status:string;response_json:string|null;error_json:string|null}>();
+    .bind(userId, id).first<{status:string;response_json:string|null;error_json:string|null}>();
   if (!row) throw new HttpError(404, 'story_not_found');
   return cachedJSON(request, { run_id: id, status: row.status, result: row.response_json ? JSON.parse(row.response_json) : null,
     error: row.error_json ? JSON.parse(row.error_json) : null });
 }
-async function comics(request: Request, env: Env, url: URL) {
-  parameters(url, ['user', 'date', 'cursor']);
-  const user = owner(url.searchParams.get('user'));
-  const date = url.searchParams.get('date') ?? '';
-  const midnight = Date.parse(date + 'T00:00:00Z');
-  if (!/^20\d{2}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(midnight) || new Date(midnight).toISOString().slice(0, 10) !== date) throw new HttpError(400, 'invalid_date');
-  if (!await env.DB.prepare('SELECT user_id FROM users WHERE user_id=?').bind(user).first()) throw new HttpError(404, 'user_not_found');
-  let after: { time: number; id: string } | null = null;
-  const raw = url.searchParams.get('cursor');
-  if (raw !== null) {
-    try {
-      if (raw.length > 1024) throw new Error();
-      const parsed = JSON.parse(atob(raw));
-      if (parsed.user !== user || parsed.date !== date || !Number.isSafeInteger(parsed.time) || parsed.time < 0 || !UUID.test(parsed.id)) throw new Error();
-      after = { time: parsed.time, id: parsed.id };
-    } catch { throw new HttpError(400, 'invalid_cursor'); }
-  }
-  const result = await env.DB.prepare(`SELECT c.run_id,c.story_id,s.title AS story_title,c.model,c.profile_version,c.status,c.provider_request_id,c.error_code,c.created_at_ms,c.updated_at_ms,
-    c.result_mime_type,c.result_byte_size,c.result_sha256,c.result_width,c.result_height,c.input_json
-    FROM comic_runs c JOIN stories s ON s.owner_id=c.owner_id AND s.story_id=c.story_id
-    JOIN story_runs sr ON sr.owner_id=s.owner_id AND sr.run_id=s.run_id
-    WHERE c.owner_id=? AND sr.story_date=?
-    ${after ? 'AND (c.created_at_ms < ? OR (c.created_at_ms = ? AND c.run_id < ?))' : ''}
-    ORDER BY c.created_at_ms DESC,c.run_id DESC LIMIT 11`)
-    .bind(user,date,...(after ? [after.time,after.time,after.id] : [])).all<ComicRow>();
-  const rows=result.results.slice(0,10);
-  const runs=rows.map(row => {
-    let refs: string[]=[]; try { const input=JSON.parse(row.input_json ?? '{}'); refs=Array.isArray(input.refs)?input.refs.map((r: any)=>r.photo_id).filter((id: unknown)=>typeof id==='string'):[]; } catch {}
-    const { input_json: _input, ...publicRow } = row;
-    return { ...publicRow, reference_photo_ids: refs, may_have_been_billed: true, image: row.status==='succeeded' ? { path:`/api/comic/${row.run_id}/image?user=${encodeURIComponent(user)}`, mime_type:row.result_mime_type, byte_size:row.result_byte_size, sha256:row.result_sha256, width:row.result_width, height:row.result_height } : null };
-  });
-  const last=rows.at(-1);
-  return cachedJSON(request,{runs,next_cursor:result.results.length>10&&last?btoa(JSON.stringify({user,date,time:last.created_at_ms,id:last.run_id})):null,timezone:'Asia/Shanghai',date_basis:'uploaded_at_ms'});
-}
-async function comicImage(request: Request, env: Env, url: URL, id: string) {
-  parameters(url, ['user']); const user=owner(url.searchParams.get('user'));
-  if(!UUID.test(id)) throw new HttpError(404,'not_found');
-  const row=await env.DB.prepare(`SELECT result_object_key,result_mime_type,result_byte_size,result_sha256 FROM comic_runs WHERE owner_id=? AND run_id=? AND status='succeeded'`).bind(user,id).first<any>();
-  if(!row||!row.result_object_key)throw new HttpError(404,'comic_not_found');
-  const etag=`"${row.result_sha256}"`;const headers={...PRIVATE,ETag:etag,'Content-Type':row.result_mime_type};
-  if(matches(request,etag))return new Response(null,{status:304,headers});
-  const object=await env.COMICS.get(row.result_object_key);
-  if(!object||object.size!==row.result_byte_size||object.customMetadata?.sha256!==row.result_sha256)throw new HttpError(503,'comic_image_unavailable');
-  return new Response(object.body,{headers:{...headers,'Content-Length':String(object.size)}});
-}
 async function photo(request: Request, env: Env, url: URL, id: string) {
   if (!UUID.test(id)) throw new HttpError(404, 'not_found');
   parameters(url, ['user']);
-  const user = url.searchParams.has('user') ? owner(url.searchParams.get('user')) : null;
+  const user = url.searchParams.has('user') ? await resolveUser(env, url.searchParams.get('user')) : null;
   const row = await env.DB.prepare(`SELECT object_key, sha256 FROM photos WHERE photo_id = ? ${user ? 'AND owner_id = ?' : ''}`)
     .bind(id, ...(user ? [user] : [])).first<{ object_key: string; sha256: string }>();
   if (!row) throw new HttpError(404, 'not_found');
@@ -293,6 +248,58 @@ async function photo(request: Request, env: Env, url: URL, id: string) {
   if (matches(request, headers.ETag)) return new Response(null, { status: 304, headers });
   const object = await env.PHOTOS.get(row.object_key);
   if (!object) throw new HttpError(404, 'photo_missing');
+  return new Response(object.body, { headers });
+}
+// 漫画按 story_date（上传日）分组，只读展示成功结果，不触发模型。
+async function comicRuns(request: Request, env: Env, url: URL) {
+  parameters(url, ['user', 'date', 'cursor']);
+  const user = owner(url.searchParams.get('user'));
+  const userId = await resolveUser(env, user);
+  const date = url.searchParams.get('date') ?? '';
+  const timestamp = Date.parse(date + 'T00:00:00Z');
+  if (!/^20\d{2}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(timestamp) || new Date(timestamp).toISOString().slice(0, 10) !== date) throw new HttpError(400, 'invalid_date');
+  let after: { time: number; id: string } | null = null;
+  const raw = url.searchParams.get('cursor');
+  if (raw !== null) {
+    try {
+      if (raw.length > 1024) throw new Error();
+      const parsed = JSON.parse(atob(raw));
+      if (parsed.user !== userId || parsed.date !== date || !Number.isSafeInteger(parsed.time) || parsed.time < 0 || !UUID.test(parsed.id)) throw new Error();
+      after = { time: parsed.time, id: parsed.id };
+    } catch { throw new HttpError(400, 'invalid_cursor'); }
+  }
+  const result = await env.DB.prepare(`SELECT c.run_id, c.story_id, s.title, s.summary, c.model, c.status,
+    c.result_mime_type, c.result_byte_size, c.result_width, c.result_height, c.provider_request_id, c.created_at_ms,
+    (SELECT MIN(COALESCE(p.captured_at_ms, p.uploaded_at_ms)) FROM json_each(s.source_photo_ids_json) j
+      JOIN photos p ON p.photo_id = j.value AND p.owner_id = s.owner_id) AS event_at_ms
+    FROM comic_runs c
+    JOIN stories s ON s.owner_id = c.owner_id AND s.story_id = c.story_id
+    JOIN story_runs r ON r.owner_id = c.owner_id AND r.run_id = s.run_id
+    WHERE c.owner_id = ? AND r.story_date = ? AND c.status = 'succeeded'
+    ${after ? 'AND (c.created_at_ms < ? OR (c.created_at_ms = ? AND c.run_id < ?))' : ''}
+    ORDER BY c.created_at_ms DESC, c.run_id DESC LIMIT 11`)
+    .bind(userId, date, ...(after ? [after.time, after.time, after.id] : [])).all<Record<string, any>>();
+  const rows = result.results.slice(0, 10);
+  const comics = rows.map(row => ({ run_id: row.run_id, story_id: row.story_id, title: row.title, summary: row.summary,
+    model: row.model, status: row.status, mime_type: row.result_mime_type, byte_size: row.result_byte_size,
+    width: row.result_width, height: row.result_height, provider_request_id: row.provider_request_id,
+    event_at_ms: row.event_at_ms, created_at_ms: row.created_at_ms }));
+  const last = rows.at(-1);
+  return cachedJSON(request, { comics, next_cursor: result.results.length > 10 && last ? btoa(JSON.stringify({ user: userId, date, time: last.created_at_ms, id: last.run_id })) : null,
+    timezone: 'Asia/Shanghai', date_basis: 'uploaded_at_ms' });
+}
+async function comicImage(request: Request, env: Env, url: URL, id: string) {
+  if (!UUID.test(id)) throw new HttpError(404, 'not_found');
+  parameters(url, ['user']);
+  const user = url.searchParams.has('user') ? await resolveUser(env, url.searchParams.get('user')) : null;
+  const row = await env.DB.prepare(`SELECT result_object_key, result_sha256, result_mime_type FROM comic_runs
+    WHERE run_id = ? ${user ? 'AND owner_id = ?' : ''} AND status = 'succeeded'`)
+    .bind(id, ...(user ? [user] : [])).first<{ result_object_key: string; result_sha256: string | null; result_mime_type: string | null }>();
+  if (!row || !row.result_object_key) throw new HttpError(404, 'not_found');
+  const headers = { ...PRIVATE, ETag: `"${row.result_sha256 ?? ''}"`, 'Content-Type': row.result_mime_type ?? 'image/png' };
+  if (matches(request, headers.ETag)) return new Response(null, { status: 304, headers });
+  const object = await env.COMICS.get(row.result_object_key);
+  if (!object) throw new HttpError(404, 'comic_missing');
   return new Response(object.body, { headers });
 }
 async function route(request: Request, env: Env) {
@@ -313,14 +320,14 @@ async function route(request: Request, env: Env) {
   if (!await sessionValid(request, env.DEBUG_PASSWORD)) throw new HttpError(401, 'unauthorized');
   if (request.method !== 'GET') return new Response(null, { status: 405, headers: { Allow: 'GET' } });
   if (url.pathname === '/api/users') return users(request, env);
-  if (url.pathname === '/api/comics') return comics(request, env, url);
-  const comicMatch = /^\/api\/comic\/([^/]+)\/image$/.exec(url.pathname);
-  if (comicMatch) return comicImage(request, env, url, comicMatch[1]);
   if (url.pathname === '/api/stories') return storyRuns(request, env, url);
   if (url.pathname === '/api/story') return storyDetail(request, env, url);
   if (url.pathname === '/api/timeline') return timeline(request, env, url);
-  const match = /^\/photo\/([^/]+)$/.exec(url.pathname);
-  if (match) return photo(request, env, url, match[1]);
+  if (url.pathname === '/api/comics') return comicRuns(request, env, url);
+  const photoMatch = /^\/photo\/([^/]+)$/.exec(url.pathname);
+  if (photoMatch) return photo(request, env, url, photoMatch[1]);
+  const comicMatch = /^\/comic\/([^/]+)$/.exec(url.pathname);
+  if (comicMatch) return comicImage(request, env, url, comicMatch[1]);
   throw new HttpError(404, 'not_found');
 }
 export default {

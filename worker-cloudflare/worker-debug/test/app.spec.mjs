@@ -3,10 +3,10 @@ import { test, expect } from '@playwright/test';
 const captureBase = Date.parse('2026-11-21T08:10:00+08:00');
 const uploadBase = Date.parse('2026-11-22T12:00:00+08:00');
 const users = [
-  { user_id: '00000000-0000-4000-8000-000000000001', status: 'active', photo_count: 14,
+  { user_id: '00000000-0000-4000-8000-000000000001', username: 'alice', status: 'active', photo_count: 14,
     first_captured_at_ms: captureBase, last_captured_at_ms: captureBase + 13 * 60000, undated_photo_count: 0,
     first_uploaded_at_ms: uploadBase, last_uploaded_at_ms: uploadBase + 13 * 60000 },
-  { user_id: '00000000-0000-4000-8000-000000000002', status: 'disabled', photo_count: 1,
+  { user_id: '00000000-0000-4000-8000-000000000002', username: 'bob', status: 'disabled', photo_count: 1,
     first_captured_at_ms: Date.parse('2026-11-20T09:10:00+08:00'),
     last_captured_at_ms: Date.parse('2026-11-20T09:10:00+08:00'), undated_photo_count: 0,
     first_uploaded_at_ms: uploadBase, last_uploaded_at_ms: uploadBase },
@@ -26,23 +26,15 @@ const manyPhotos = count => Array.from({ length: count }, (_, index) => ({ ...ph
 const photoIDs = page => page.locator('.photo-details-button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label').split(' ')[0]));
 
 async function fixtures(page, options = {}) {
-  const calls = { timeline: [], images: [], external: [], stories: [], details: [], comics: [], comicImages: [] };
+  const calls = { timeline: [], images: [], external: [], stories: [], details: [] };
   await page.route('**/*', async route => {
     const request = route.request();
     const url = new URL(request.url());
     if (url.hostname !== 'localhost') { calls.external.push(request.url()); return route.abort(); }
     const authorized = (request.headers().cookie || '').includes('lookme_debug=');
-    if (['/api/users', '/api/timeline', '/api/stories', '/api/story', '/api/comics'].includes(url.pathname) || url.pathname.startsWith('/api/comic/') || url.pathname.startsWith('/photo/')) {
+    if (['/api/users', '/api/timeline', '/api/stories', '/api/story'].includes(url.pathname) || url.pathname.startsWith('/photo/')) {
       if (!authorized) return route.fulfill({ status: 401, json: { error: 'unauthorized' } });
       if (url.pathname === '/api/users') return route.fulfill({ json: { users: options.users ?? users } });
-      if (url.pathname === '/api/comics') {
-        calls.comics.push(url);
-        return options.comics ? options.comics(route,url,calls) : route.fulfill({json:{runs:[],next_cursor:null,date_basis:'uploaded_at_ms'}});
-      }
-      if (url.pathname.startsWith('/api/comic/')) {
-        calls.comicImages.push(url);
-        return options.comicImage ? options.comicImage(route,url,calls) : route.fulfill({contentType:'image/svg+xml',body:image});
-      }
       if (url.pathname === '/api/stories') {
         calls.stories.push(url);
         return options.stories ? options.stories(route,url,calls) : route.fulfill({json:{runs:[],next_cursor:null,date_basis:'uploaded_at_ms'}});
@@ -58,15 +50,17 @@ async function fixtures(page, options = {}) {
           ? [{ ...photos[0], captured_at_ms: users[1].last_captured_at_ms, result_text: '第二位用户的合成摘要' }]
           : options.photos ?? photos;
         const date = url.searchParams.get('date');
-        const from = Date.parse(`${date}T${url.searchParams.get('start') || '00:00'}:00+08:00`);
-        const to = Date.parse(`${date}T${url.searchParams.get('end') || '23:59'}:00+08:00`) + 60000;
-        const filtered = source.filter(photo => photo.captured_at_ms !== null && photo.captured_at_ms >= from && photo.captured_at_ms < to)
-          .sort((a, b) => a.captured_at_ms - b.captured_at_ms || a.photo_id.localeCompare(b.photo_id));
-        const offset = Number(url.searchParams.get('cursor') || 0);
+        let filtered = source;
+        if (date) {
+          const from = Date.parse(`${date}T${url.searchParams.get('start') || '00:00'}:00+08:00`);
+          const to = Date.parse(`${date}T${url.searchParams.get('end') || '23:59'}:00+08:00`) + 60000;
+          filtered = source.filter(photo => photo.captured_at_ms !== null && photo.captured_at_ms >= from && photo.captured_at_ms < to);
+        }
+        filtered.sort((a, b) => (a.captured_at_ms ?? a.uploaded_at_ms) - (b.captured_at_ms ?? b.uploaded_at_ms) || a.photo_id.localeCompare(b.photo_id));
+        const offset = Number(url.searchParams.get('offset') || 0);
         const limit = Number(url.searchParams.get('limit'));
         return route.fulfill({ json: { photos: filtered.slice(offset, offset + limit),
-          next_cursor: offset + limit < filtered.length ? String(offset + limit) : null,
-          date_basis: 'captured_at_ms', timezone: 'Asia/Shanghai' } });
+          total: filtered.length, offset, limit, date_basis: 'captured_at_ms', timezone: 'Asia/Shanghai' } });
       }
       calls.images.push(url);
       if (options.photo) return options.photo(route, url, calls);
@@ -91,8 +85,8 @@ test('卡片与图片框统一大小，摘要截断但详情保留全文', async
   page.on('pageerror', error => errors.push(error.message));
   await login(page);
   await expect(page.locator('.photo-card')).toHaveCount(14);
-  await expect(page.locator('#photo-count')).toHaveText('本页 14 张');
-  await expect(page.locator('#date')).toHaveValue('2026-11-21');
+  await expect(page.locator('#photo-count')).toHaveText('第 1 页 · 14 张');
+  await expect(page.locator('#date')).toHaveValue('');
   await expect(page.locator('.photo-time').first()).toContainText('08:10:00');
   expect(calls.timeline).toHaveLength(1);
   expect(calls.timeline[0].searchParams.get('limit')).toBe('24');
@@ -123,7 +117,7 @@ test('卡片与图片框统一大小，摘要截断但详情保留全文', async
   expect(calls.external).toEqual([]);
 });
 
-test('大量照片每页最多24张，前后翻页不追加或自动读取下一页', async ({ page }) => {
+test('大量照片每页最多24张，前后翻页可跳页', async ({ page }) => {
   const all = manyPhotos(62);
   const calls = await fixtures(page, { photos: all });
   await login(page);
@@ -133,14 +127,14 @@ test('大量照片每页最多24张，前后翻页不追加或自动读取下一
   await expect(page.locator('#previous-page')).toBeDisabled();
   await expect(page.locator('#next-page')).toBeEnabled();
   await page.locator('#next-page').click();
-  await expect(page.locator('#page-label')).toHaveText('第 2 页');
+  await expect(page.locator('#page-label')).toHaveText('共 62 张 · 3 页');
   await expect(page.locator('#notice')).toHaveText('');
   expect(await photoIDs(page)).toEqual(all.slice(24, 48).map(photo => photo.photo_id));
   expect(calls.timeline).toHaveLength(2);
-  expect(calls.timeline.at(-1).searchParams.get('cursor')).toBe('24');
-  await page.locator('#next-page').click();
-  await expect(page.locator('#photo-count')).toHaveText('本页 14 张');
-  await expect(page.locator('#page-label')).toHaveText('第 3 页');
+  expect(calls.timeline.at(-1).searchParams.get('offset')).toBe('24');
+  await page.locator('.page-number').nth(2).click();
+  await expect(page.locator('#photo-count')).toHaveText('第 3 页 · 14 张');
+  await expect(page.locator('#page-label')).toHaveText('共 62 张 · 3 页');
   await expect(page.locator('#next-page')).toBeDisabled();
   expect(await photoIDs(page)).toEqual(all.slice(48).map(photo => photo.photo_id));
   await page.locator('#previous-page').click();
@@ -149,33 +143,30 @@ test('大量照片每页最多24张，前后翻页不追加或自动读取下一
   await page.locator('#previous-page').click();
   await expect(page.locator('#notice')).toHaveText('');
   expect(await photoIDs(page)).toEqual(all.slice(0, 24).map(photo => photo.photo_id));
-  expect(calls.timeline.at(-1).searchParams.has('cursor')).toBe(false);
+  expect(calls.timeline.at(-1).searchParams.get('offset')).toBe('0');
 });
 
-test('筛选和刷新重置到第一页，使用已应用的拍摄时间', async ({ page }) => {
+test('筛选和重置：筛选后重置回全部照片', async ({ page }) => {
   const calls = await fixtures(page, { photos: manyPhotos(62) });
   await login(page);
-  await page.locator('#next-page').click();
-  await expect(page.locator('#notice')).toHaveText('');
+  await page.locator('#date').fill('2026-11-21');
   await page.locator('#start-time').fill('08:10');
   await page.locator('#end-time').fill('08:10');
   await page.locator('#apply').click();
-  await expect(page.locator('#photo-count')).toHaveText('本页 1 张');
-  await expect(page.locator('#page-label')).toHaveText('第 1 页');
-  expect(calls.timeline.at(-1).searchParams.has('cursor')).toBe(false);
-  await page.locator('#date').fill('2026-11-19');
-  await page.locator('#refresh').click();
-  await expect(page.locator('#date')).toHaveValue('2026-11-21');
-  await expect(page.locator('#photo-count')).toHaveText('本页 1 张');
-  await page.locator('#full-day').click();
-  await expect(page.locator('#photo-count')).toHaveText('本页 24 张');
-  await expect(page.locator('#start-time')).toHaveValue('00:00');
-  await expect(page.locator('#end-time')).toHaveValue('23:59');
+  await expect(page.locator('#photo-count')).toHaveText('第 1 页 · 1 张');
+  expect(calls.timeline.at(-1).searchParams.get('date')).toBe('2026-11-21');
+  expect(calls.timeline.at(-1).searchParams.get('offset')).toBe('0');
+  await page.locator('#reset').click();
+  await expect(page.locator('#date')).toHaveValue('');
+  await expect(page.locator('#photo-count')).toHaveText('第 1 页 · 24 张');
+  await expect(page.locator('#page-label')).toHaveText('共 62 张 · 3 页');
+  expect(calls.timeline.at(-1).searchParams.has('date')).toBe(false);
 });
 
-test('无效时间不发请求，空拍摄日期不回退至上传日期', async ({ page }) => {
+test('有日期时无效时间段不发请求；无日期时前后翻日不生效', async ({ page }) => {
   const calls = await fixtures(page);
   await login(page);
+  await page.locator('#date').fill('2026-11-21');
   const count = calls.timeline.length;
   await page.locator('#start-time').fill('18:00');
   await page.locator('#end-time').fill('08:00');
@@ -184,11 +175,10 @@ test('无效时间不发请求，空拍摄日期不回退至上传日期', async
   expect(calls.timeline).toHaveLength(count);
   await page.locator('#full-day').click();
   await expect(page.locator('#notice')).toHaveText('');
+  await page.locator('#reset').click();
   await page.locator('#next-day').click();
-  await expect(page.locator('#date')).toHaveValue('2026-11-22');
-  await expect(page.locator('#photo-count')).toHaveText('本页 0 张');
-  await expect(page.locator('#empty')).toBeVisible();
-  await expect(page.locator('#pager')).toBeHidden();
+  await expect(page.locator('#date')).toHaveValue('');
+  await expect(page.locator('#photo-count')).toHaveText('第 1 页 · 14 张');
 });
 
 test('会话恢复和用户切换保持照片归属及拍摄日期', async ({ page }) => {
@@ -198,9 +188,9 @@ test('会话恢复和用户切换保持照片归属及拍摄日期', async ({ pa
   await expect(page.locator('.photo-card')).toHaveCount(14);
   await page.locator('.user-button').nth(1).click();
   await expect(page.locator('.summary')).toHaveText('第二位用户的合成摘要');
-  await expect(page.locator('#date')).toHaveValue('2026-11-20');
+  await expect(page.locator('#date')).toHaveValue('');
   await expect(page.locator('.user-button').nth(1)).toHaveAttribute('aria-current', 'page');
-  await expect(page.locator('#page-label')).toHaveText('第 1 页');
+  await expect(page.locator('#page-label')).toHaveText('共 1 张 · 1 页');
   expect(calls.timeline.at(-1).searchParams.get('user')).toBe(users[1].user_id);
 });
 
@@ -217,7 +207,7 @@ test('侧栏可收起展开，并保留用户、视图与每页卡片尺寸', as
   await page.reload();
   await expect(page.locator('#toggle-sidebar')).toHaveAttribute('aria-expanded', 'false');
   await page.locator('#toggle-sidebar').click();
-  await expect(page.locator('.user-id').first()).toHaveText(users[0].user_id);
+  await expect(page.locator('.user-button strong').first()).toHaveText('alice');
   await expect(page.locator('#toggle-sidebar')).toHaveAttribute('aria-expanded', 'true');
 });
 
@@ -250,12 +240,14 @@ test('分页请求未完成时切换用户，旧页不能覆盖当前用户', as
   let started;
   const wait = new Promise(resolve => { release = resolve; });
   const ready = new Promise(resolve => { started = resolve; });
+  const many = manyPhotos(30);
   await fixtures(page, { timeline: async (route, url) => {
-    if (url.searchParams.get('user') === users[1].user_id) return route.fulfill({ json: { photos: [{ ...photos[0], result_text: '新用户照片' }], next_cursor: null } });
-    if (!url.searchParams.has('cursor')) return route.fulfill({ json: { photos, next_cursor: '24' } });
+    if (url.searchParams.get('user') === users[1].user_id) return route.fulfill({ json: { photos: [{ ...photos[0], result_text: '新用户照片' }], total: 1, offset: 0, limit: 24 } });
+    const offset = Number(url.searchParams.get('offset') || 0);
+    if (offset === 0) return route.fulfill({ json: { photos: many.slice(0, 24), total: 30, offset: 0, limit: 24 } });
     started();
     await wait;
-    return route.fulfill({ json: { photos, next_cursor: null } }).catch(() => {});
+    return route.fulfill({ json: { photos: many.slice(24), total: 30, offset: 24, limit: 24 } }).catch(() => {});
   } });
   await login(page);
   await page.locator('#next-page').click();
@@ -264,28 +256,30 @@ test('分页请求未完成时切换用户，旧页不能覆盖当前用户', as
   await expect(page.locator('.summary')).toHaveText('新用户照片');
   release();
   await expect(page.locator('.photo-card')).toHaveCount(1);
-  await expect(page.locator('#page-label')).toHaveText('第 1 页');
+  await expect(page.locator('#page-label')).toHaveText('共 1 张 · 1 页');
 });
 
 test('分页失败可以重试该页或退回上一页，不伪装加载成功', async ({ page }) => {
   let failed = false;
+  const many = manyPhotos(30);
   const calls = await fixtures(page, { timeline: (route, url) => {
-    if (!url.searchParams.has('cursor')) return route.fulfill({ json: { photos, next_cursor: '24' } });
+    const offset = Number(url.searchParams.get('offset') || 0);
+    if (offset === 0) return route.fulfill({ json: { photos: many.slice(0, 24), total: 30, offset: 0, limit: 24 } });
     if (!failed) { failed = true; return route.fulfill({ status: 503, json: { error: 'storage_unavailable' } }); }
-    return route.fulfill({ json: { photos: photos.slice(0, 2), next_cursor: null } });
+    return route.fulfill({ json: { photos: many.slice(24, 26), total: 30, offset: 24, limit: 24 } });
   } });
   await login(page);
   await page.locator('#next-page').click();
   await expect(page.locator('#notice')).toHaveText('数据读取失败。');
-  await expect(page.locator('#page-label')).toHaveText('第 2 页');
+  await expect(page.locator('#page-label')).toHaveText('共 30 张 · 2 页');
   await expect(page.locator('.photo-card')).toHaveCount(0);
   await expect(page.locator('#retry-page')).toBeVisible();
   await expect(page.locator('#previous-page')).toBeEnabled();
   await page.locator('#retry-page').click();
-  await expect(page.locator('#photo-count')).toHaveText('本页 2 张');
-  expect(calls.timeline.at(-1).searchParams.get('cursor')).toBe('24');
+  await expect(page.locator('#photo-count')).toHaveText('第 2 页 · 2 张');
+  expect(calls.timeline.at(-1).searchParams.get('offset')).toBe('24');
   await page.locator('#previous-page').click();
-  await expect(page.locator('#photo-count')).toHaveText('本页 14 张');
+  await expect(page.locator('#photo-count')).toHaveText('第 1 页 · 24 张');
 });
 
 test('图片失败可重试，懒加载仅针对当前页', async ({ page }) => {
@@ -311,8 +305,8 @@ test('未知拍摄时间单独计数，不使用最后上传日期作为默认�
   await fixtures(page, { users: [undated], photos: [] });
   await login(page);
   await expect(page.locator('.user-button')).toContainText('3 张缺少拍摄时间');
-  await expect(page.locator('#date')).not.toHaveValue('2020-01-01');
-  await expect(page.locator('#photo-count')).toHaveText('本页 0 张');
+  await expect(page.locator('#date')).toHaveValue('');
+  await expect(page.locator('#photo-count')).toHaveText('第 1 页 · 0 张');
 });
 
 test('会话失效清除当前页、详情、大图及用户信息', async ({ page, context }) => {
@@ -486,22 +480,4 @@ test('故事独立折叠、键盘切换和整批收起不会重复读取或丢�
   const expand = page.getByRole('button', { name: '展开故事列表' }); await expect(expand).toHaveAttribute('aria-expanded', 'false'); await expand.click();
   await expect(page.locator('.story-content')).toBeVisible(); await expect(stories.nth(1)).toHaveAttribute('open', '');
   expect(calls.details).toHaveLength(1); expect(calls.external).toEqual([]);
-});
-
-
-const comicRun = { run_id:'50000000-0000-4000-8000-000000000001', story_id:'40000000-0000-4000-8000-000000000001', story_title:'测试故事',
-  model:'@cf/black-forest-labs/flux-2-klein-9b', profile_version:'v1', status:'succeeded', provider_request_id:'comic-provider',
-  created_at_ms:uploadBase+1000, updated_at_ms:uploadBase+2000, reference_photo_ids:[photos[0].photo_id], may_have_been_billed:true,
-  image:{path:'/api/comic/50000000-0000-4000-8000-000000000001/image?user='+users[0].user_id,mime_type:'image/png',byte_size:4,sha256:'b'.repeat(64),width:1024,height:1536} };
-test('漫画视图显示模型和成图元信息，私有图片加载且与照片/故事视图隔离', async ({ page, context }) => {
-  const calls=await fixtures(page,{comics:(route,url)=>url.searchParams.get('user')===users[1].user_id ? route.fulfill({json:{runs:[],next_cursor:null,date_basis:'uploaded_at_ms'}}) : route.fulfill({json:{runs:[comicRun],next_cursor:null,date_basis:'uploaded_at_ms'}})});
-  await login(page); await page.locator('#comics-view').click();
-  await expect(page.locator('#comics-panel')).toBeVisible(); await expect(page.locator('#photos-panel')).toBeHidden(); await expect(page.locator('#stories-panel')).toBeHidden();
-  await expect(page.locator('#date-label')).toHaveText('漫画日期（故事上传日）');
-  await expect(page.locator('.comic-run')).toHaveCount(1); await expect(page.locator('.comic-run')).toContainText(comicRun.model); await expect(page.locator('.comic-run')).toContainText('1024 × 1536');
-  await page.locator('.comic-image').scrollIntoViewIfNeeded(); await expect(page.locator('.comic-image')).toBeVisible(); expect(calls.comics).toHaveLength(1); expect(calls.comicImages).toHaveLength(1);
-  expect(calls.timeline).toHaveLength(1); expect(calls.stories).toHaveLength(0); expect(calls.external).toEqual([]);
-  await page.locator('.user-button').nth(1).click(); await expect(page.locator('.comic-run')).toHaveCount(0); await expect(page.locator('#comics-status')).toContainText('暂无漫画记录');
-  expect(calls.comics.at(-1).searchParams.get('user')).toBe(users[1].user_id);
-  expect((await context.cookies()).find(c=>c.name==='lookme_debug')).toMatchObject({httpOnly:true,secure:true,sameSite:'Strict'});
 });

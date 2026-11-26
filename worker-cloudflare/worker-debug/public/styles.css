@@ -41,7 +41,6 @@ h2 { font-size: 15px; }
 .user-label { min-width: 0; }
 .user-button strong { display: block; font-size: 12px; }
 .user-button small { display: block; font-size: 11px; color: var(--muted); }
-.user-button .user-id { margin-top: 4px; font: 10px/1.5 var(--mono); overflow-wrap: anywhere; }
 .view-links { display: flex; flex-direction: column; gap: 4px; padding: 6px 0 0 24px; }
 .view-button { border: 0; padding: 6px 10px; text-align: left; background: transparent; color: var(--muted); font-size: 12px; }
 .view-button[aria-current="page"] { background: var(--soft); color: var(--accent); font-weight: 600; }
@@ -84,6 +83,11 @@ h2 { font-size: 15px; }
 .empty-state { padding: 36px 0; text-align: center; }
 .pager { display: flex; align-items: center; justify-content: center; gap: 16px; margin-top: 18px; }
 .pager span { font: 12px var(--mono); }
+.page-numbers { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; max-width: 60vw; }
+.page-number { padding: 4px 9px; font: 12px var(--mono); border-radius: 5px; }
+.page-number.current { background: var(--accent); color: var(--surface); border-color: var(--accent); }
+.jump { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.jump input { width: 64px; height: 30px; text-align: center; }
 #retry-page { display: block; margin: 12px auto 0; }
 .login-screen { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; }
 .login-card { display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 340px; padding: 24px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
@@ -142,8 +146,7 @@ dialog p { font: 11px var(--mono); padding-top: 10px; text-align: center; }
 .saved-story[open] > .story-toggle .story-toggle-hint::after { content: '收起详情'; }
 .saved-story-body { padding-top: 12px; }
 .story-run h5 { font-size: 13px; }
+.comic-card { margin: 16px 0; padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); min-width: 0; }
+.comic-card h3 { font-size: 15px; margin-bottom: 12px; overflow-wrap: anywhere; }
+.comic-image { display: block; max-width: 100%; max-height: 720px; object-fit: contain; margin: 12px auto 0; border-radius: 6px; }
 @media (max-width: 700px) { .story-panels { grid-template-columns: 1fr; } .story-metadata { grid-template-columns: 90px minmax(0, 1fr); } }
-
-.comic-run { margin: 16px 0; padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); min-width: 0; }
-.comic-run h3 { font-size: 15px; margin-bottom: 12px; }
-.comic-image { display: block; width: min(100%, 420px); max-height: 620px; object-fit: contain; margin: 16px auto 0; border: 1px solid var(--line); border-radius: 6px; background: var(--canvas); }

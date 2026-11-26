@@ -1,4 +1,4 @@
--- LookMe D1 当前完整结构快照（0001 + 0002 + 0003 + 0004 + 0005）；已有库只应用缺失的版本化迁移。
+-- LookMe D1 当前完整结构快照（0001 + 0002 + 0003 + 0004 + 0005 + 0006 + 0007）；已有库只应用缺失的版本化迁移。
 -- 时间统一为 UTC Unix 毫秒；owner_id 来自认证，不接受客户端自报。
 CREATE TABLE photos (
   photo_id TEXT PRIMARY KEY NOT NULL,
@@ -71,11 +71,15 @@ CREATE TABLE job_dispatch (
 CREATE INDEX job_dispatch_pending ON job_dispatch(dispatch_after_ms) WHERE published_at_ms IS NULL;
 
 -- 保留已有照片/任务归属；不重建已有业务表，不为历史 owner 自动签发凭据。
+-- username 为人类可记的唯一用户名（大小写不敏感），与 user_id 1:1；历史补建用户为 NULL 待补记。
 CREATE TABLE users (
   user_id TEXT PRIMARY KEY NOT NULL,
+  username TEXT CHECK(username IS NULL OR (length(username) BETWEEN 1 AND 64 AND username NOT GLOB '*[^A-Za-z0-9_-]*')),
   status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'disabled')),
   created_at_ms INTEGER NOT NULL
 );
+
+CREATE UNIQUE INDEX users_username_unique ON users(username COLLATE NOCASE) WHERE username IS NOT NULL;
 
 INSERT INTO users (user_id, created_at_ms)
 SELECT owner_id, MIN(created_at_ms) FROM (

@@ -4,14 +4,16 @@
   const PAGE_SIZE = 24;
   const ids = ['login-screen', 'login-form', 'password', 'login-button', 'login-error', 'workspace',
     'user-list', 'user-count', 'toggle-sidebar', 'refresh', 'filters', 'date', 'start-time', 'end-time',
-    'previous-day', 'next-day', 'full-day', 'apply', 'zone-note', 'notice', 'photos-panel', 'stories-panel', 'comics-panel',
-    'story-status', 'comics-status', 'comic-list', 'more-comics', 'retry-comics', 'photo-count', 'empty', 'photo-grid', 'pager', 'previous-page', 'next-page', 'page-label',
-    'retry-page', 'lightbox', 'close-lightbox', 'large-photo', 'large-caption', 'info-dialog', 'close-info',
-    'info-summary', 'info-metadata', 'date-label', 'story-list', 'more-stories', 'retry-stories'];
+    'previous-day', 'next-day', 'full-day', 'apply', 'reset', 'zone-note', 'notice', 'photos-panel', 'stories-panel',
+    'comics-panel', 'story-status', 'comic-status', 'photo-count', 'empty', 'photo-grid', 'pager',
+    'previous-page', 'next-page', 'page-label', 'page-numbers', 'page-jump', 'retry-page', 'lightbox', 'close-lightbox', 'large-photo',
+    'large-caption', 'info-dialog', 'close-info', 'info-summary', 'info-metadata', 'date-label', 'story-list',
+    'more-stories', 'retry-stories', 'comic-list', 'more-comics', 'retry-comics'];
   const ui = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
-  const state = { users: [], user: null, view: 'photos', range: null, photos: [],
-    pageIndex: 0, pageCursors: [null], nextCursor: null, epoch: 0, loading: false,
-    controller: null, images: new Map(), lightbox: null, storyCursor: null, storyCount: 0, comicCursor: null, comicCount: 0 };
+  const state = { users: [], user: null, expanded: null, view: 'photos', range: null, photos: [],
+    page: 1, total: 0, pageCount: 1, epoch: 0, loading: false,
+    controller: null, images: new Map(), lightbox: null, storyCursor: null, storyCount: 0,
+    comicCursor: null, comicCount: 0 };
   const errors = { unauthorized: '会话过期，请登录。', debug_not_configured: '未配置访问口令。',
     storage_unavailable: '数据读取失败。', user_not_found: '用户不存在，请刷新。',
     invalid_date: '日期无效。', invalid_time_range: '结束时间不能早于开始时间。',
@@ -95,14 +97,15 @@
     ui['photo-grid'].replaceChildren();
     state.photos = [];
     ui['story-list'].replaceChildren();
-    ui['comic-list'].replaceChildren();
     ui['more-stories'].hidden = true;
-    ui['more-comics'].hidden = true;
-    ui['retry-comics'].hidden = true;
     ui['retry-stories'].hidden = true;
     ui['story-status'].textContent = '';
-    state.storyCursor = null; state.storyCount = 0; state.comicCursor = null; state.comicCount = 0;
-    state.nextCursor = null;
+    state.storyCursor = null; state.storyCount = 0;
+    ui['comic-list'].replaceChildren();
+    ui['more-comics'].hidden = true;
+    ui['retry-comics'].hidden = true;
+    ui['comic-status'].textContent = '';
+    state.comicCursor = null; state.comicCount = 0;
     state.loading = false;
     ui.empty.hidden = true;
     ui['retry-page'].hidden = true;
@@ -110,30 +113,35 @@
     ui['photo-count'].textContent = '';
   }
   function updateView() {
-    const stories = state.view === 'stories', comics = state.view === 'comics';
-    ui['photos-panel'].hidden = stories || comics;
-    ui['stories-panel'].hidden = !stories;
-    ui['comics-panel'].hidden = !comics;
-    ui.filters.dataset.view = state.view;
-    ui.filters.setAttribute('aria-label', stories || comics ? '按故事/漫画上传日期筛选' : '按拍摄时间筛选');
-    for (const node of document.querySelectorAll('.photo-filter')) node.hidden = stories || comics;
-    ui['start-time'].disabled = stories || comics;
-    ui['end-time'].disabled = stories || comics;
+    const view = state.view;
+    const photos = view === 'photos';
+    const dateOnly = !photos;
+    ui['photos-panel'].hidden = !photos;
+    ui['stories-panel'].hidden = view !== 'stories';
+    ui['comics-panel'].hidden = view !== 'comics';
+    ui.filters.dataset.view = view;
+    ui.filters.setAttribute('aria-label', photos ? '按拍摄时间筛选' : '按上传日期筛选');
+    for (const node of document.querySelectorAll('.photo-filter')) node.hidden = dateOnly;
+    ui['start-time'].disabled = dateOnly;
+    ui['end-time'].disabled = dateOnly;
     ui['end-time'].setCustomValidity('');
-    ui['date-label'].textContent = stories || comics ? (stories ? '故事日期（上传日）' : '漫画日期（故事上传日）') : '拍摄日期';
-    ui['zone-note'].textContent = stories || comics ? `UTC+8 · 按${stories ? '故事上传日' : '故事上传日'} · 只读历史结果` : 'UTC+8 · 含结束分钟';
+    ui['date-label'].textContent = photos ? '拍摄日期（留空显示全部）' : '故事日期（上传日）';
+    ui['zone-note'].textContent = photos ? '默认显示全部 · 筛选后仅显示匹配照片' : 'UTC+8 · 按上传日 · 只读历史结果';
   }
   function showLogin(error = '') {
     resetPhotos();
     state.users = [];
     state.user = null;
+    state.expanded = null;
     state.range = null;
     state.view = 'photos';
-    state.pageIndex = 0;
-    state.pageCursors = [null];
+    state.page = 1;
+    state.total = 0;
+    state.pageCount = 1;
     ui['user-list'].replaceChildren();
     ui['user-count'].textContent = '';
     ui['story-status'].textContent = '';
+    ui['comic-status'].textContent = '';
     updateView();
     ui.workspace.hidden = true;
     ui['login-screen'].hidden = false;
@@ -143,23 +151,32 @@
     if (error) ui.password.focus();
   }
   function renderUsers() {
-    ui['user-list'].replaceChildren(...state.users.map((user, index) => {
+    ui['user-list'].replaceChildren(...state.users.map(user => {
       const group = element('div', 'user-group');
       const button = element('button', 'user-button');
       const selected = user.user_id === state.user?.user_id;
+      const expanded = user.user_id === state.expanded;
+      const name = user.username || user.user_id;
       button.type = 'button';
       button.setAttribute('aria-current', selected ? 'page' : 'false');
-      button.setAttribute('aria-label', `用户 ${index + 1}，${user.user_id}`);
+      button.setAttribute('aria-expanded', String(expanded));
+      button.setAttribute('aria-label', name);
       const label = element('span', 'user-label');
-      label.append(element('strong', '', `用户 ${index + 1}`),
+      label.append(element('strong', '', name),
         element('small', '', `${user.photo_count} 张 · ${user.status === 'active' ? '启用' : '停用'}`));
       if (user.undated_photo_count) label.append(element('small', '', `${user.undated_photo_count} 张缺少拍摄时间`));
-      label.append(element('small', 'user-id', user.user_id));
-      button.append(element('span', 'user-avatar', String(index + 1).padStart(2, '0')), label);
-      button.title = user.user_id;
-      button.addEventListener('click', () => selectUser(user));
+      button.append(label);
+      button.title = name;
+      button.addEventListener('click', () => {
+        if (state.expanded === user.user_id) {
+          state.expanded = null;
+          renderUsers();
+        } else {
+          selectUser(user);
+        }
+      });
       group.append(button);
-      if (selected) {
+      if (expanded) {
         const links = element('div', 'view-links');
         for (const [view, name] of [['photos', '照片'], ['stories', '故事'], ['comics', '漫画']]) {
           const link = element('button', 'view-button', name);
@@ -210,16 +227,17 @@
   }
   function restoreRange() {
     if (!state.range) return;
-    ui.date.value = state.range.date;
+    ui.date.value = state.range.date ?? '';
     ui['start-time'].value = state.range.start;
     ui['end-time'].value = state.range.end;
   }
   function selectUser(user, preserveRange = false) {
     state.user = user;
+    state.expanded = user.user_id;
     renderUsers();
     updateView();
     if (!preserveRange) {
-      ui.date.value = dateValue((state.view === 'stories' ? user.last_uploaded_at_ms : user.last_captured_at_ms) ?? Date.now());
+      ui.date.value = state.view === 'photos' ? '' : dateValue(user.last_uploaded_at_ms ?? Date.now());
       ui['start-time'].value = '00:00';
       ui['end-time'].value = '23:59';
     } else restoreRange();
@@ -228,7 +246,10 @@
   function switchView(view) {
     if (!state.user || state.view === view) return;
     state.view = view;
-    if (state.range) state.range.date = dateValue((view === 'stories' || view === 'comics' ? state.user.last_uploaded_at_ms : state.user.last_captured_at_ms) ?? Date.now());
+    if (state.range) {
+      if (view === 'photos') state.range.date = null;  // 切回照片默认显示全部
+      else if (!state.range.date) state.range.date = dateValue(state.user.last_uploaded_at_ms ?? Date.now());
+    }
     restoreRange();
     renderUsers();
     updateView();
@@ -238,50 +259,62 @@
   function validRange() {
     ui['end-time'].setCustomValidity(state.view === 'photos' && ui['start-time'].value > ui['end-time'].value
       ? '结束时间不能早于开始时间。' : '');
+    ui.date.setCustomValidity(state.view !== 'photos' && !ui.date.value ? '故事/漫画视图需要日期。' : '');
     return ui.filters.reportValidity();
   }
   function applyFilters() {
     if (!state.user || !validRange()) return;
     resetPhotos();
-    state.range = { date: ui.date.value, start: ui['start-time'].value, end: ui['end-time'].value };
-    state.pageIndex = 0;
-    state.pageCursors = [null];
-    ui['previous-day'].disabled = state.range.date === ui.date.min;
-    ui['next-day'].disabled = state.range.date === ui.date.max;
-    if (state.view === 'photos') loadPage(0);
+    state.total = 0; state.pageCount = 1;
+    state.range = { date: ui.date.value || null, start: ui['start-time'].value, end: ui['end-time'].value };
+    state.page = 1;
+    if (state.view === 'photos') loadPage(1);
     else if (state.view === 'stories') loadStories();
     else loadComics();
   }
   function updatePager() {
-    ui['page-label'].textContent = `第 ${state.pageIndex + 1} 页`;
-    ui['previous-page'].disabled = state.loading || state.pageIndex === 0;
-    ui['next-page'].disabled = state.loading || !state.nextCursor;
-    ui.pager.hidden = state.view !== 'photos' || !(state.photos.length || state.loading || state.pageIndex > 0 || !ui['retry-page'].hidden);
+    const photos = state.view === 'photos';
+    state.pageCount = photos ? Math.max(1, Math.ceil(state.total / PAGE_SIZE)) : 1;
+    ui['page-label'].textContent = photos ? `共 ${state.total} 张 · ${state.pageCount} 页` : '';
+    ui['previous-page'].disabled = state.loading || state.page <= 1;
+    ui['next-page'].disabled = state.loading || state.page >= state.pageCount;
+    ui['page-numbers'].replaceChildren();
+    if (photos && state.pageCount > 1) {
+      for (let p = 1; p <= state.pageCount; p++) {
+        const btn = element('button', `page-number${p === state.page ? ' current' : ''}`, String(p));
+        btn.type = 'button';
+        btn.setAttribute('aria-current', p === state.page ? 'page' : 'false');
+        btn.setAttribute('aria-label', `第 ${p} 页`);
+        btn.addEventListener('click', () => loadPage(p));
+        ui['page-numbers'].append(btn);
+      }
+    }
+    ui['page-jump'].max = String(state.pageCount);
+    ui['page-jump'].value = String(state.page);
+    ui.pager.hidden = state.view !== 'photos' || (!state.photos.length && !state.loading);
   }
-  async function loadPage(index) {
-    if (state.loading || !state.user || !state.range || state.view !== 'photos' || index < 0 || index >= state.pageCursors.length) return;
-    const cursor = state.pageCursors[index];
+  async function loadPage(page) {
+    if (state.loading || !state.user || !state.range || state.view !== 'photos' || page < 1 || page > state.pageCount) return;
     resetPhotos();
-    state.pageIndex = index;
+    state.page = page;
     state.loading = true;
     const epoch = state.epoch;
     const controller = state.controller = new AbortController();
     updatePager();
     notice('加载照片…');
     try {
-      const query = new URLSearchParams({ user: state.user.user_id, ...state.range, limit: String(PAGE_SIZE) });
-      if (cursor) query.set('cursor', cursor);
+      const query = new URLSearchParams({ user: state.user.user_id, limit: String(PAGE_SIZE), offset: String((page - 1) * PAGE_SIZE) });
+      if (state.range.date) { query.set('date', state.range.date); query.set('start', state.range.start); query.set('end', state.range.end); }
       const data = await json(`/api/timeline?${query}`, { signal: controller.signal });
       if (epoch !== state.epoch) return;
       state.photos = data.photos;
-      state.nextCursor = data.next_cursor;
-      state.pageCursors = state.pageCursors.slice(0, index + 1);
-      if (state.nextCursor) state.pageCursors.push(state.nextCursor);
+      state.total = data.total;
+      state.pageCount = Math.max(1, Math.ceil(state.total / PAGE_SIZE));
       const fragment = document.createDocumentFragment();
       for (let index = 0; index < state.photos.length; index++) fragment.append(card(state.photos[index], index));
       ui['photo-grid'].append(fragment);
       for (const media of ui['photo-grid'].querySelectorAll('.photo-media')) imageObserver.observe(media);
-      ui['photo-count'].textContent = `本页 ${state.photos.length} 张`;
+      ui['photo-count'].textContent = `第 ${state.page} 页 · ${state.photos.length} 张`;
       ui.empty.textContent = '无照片';
       ui.empty.hidden = state.photos.length !== 0;
       notice();
@@ -391,46 +424,44 @@
     } catch (error) { fail(error, epoch); if (epoch === state.epoch) { ui['retry-stories'].hidden = false; ui['retry-stories'].dataset.more = String(more); } }
     finally { if (epoch === state.epoch) { state.loading = false; ui['more-stories'].disabled = false; } }
   }
-  const comicDuration = value => typeof value === 'number' && Number.isFinite(value) ? `${(value / 1000).toFixed(2)} 秒` : '未知';
-  function comicCard(run) {
-    const card = element('article', 'comic-run');
-    const status = { succeeded: '已保存', generating: '生成中 / 未确认', needs_review: '需人工核查' };
-    card.append(element('h3', '', `${run.story_title || '漫画'} · ${status[run.status] || run.status}`));
-    const meta = metadata([
-      ['模型', run.model], ['Profile', run.profile_version], ['故事', run.story_title], ['故事ID', run.story_id], ['批次ID', run.run_id],
-      ['生成时间', timestamp(run.created_at_ms)], ['更新时间', timestamp(run.updated_at_ms)], ['供应商请求ID', run.provider_request_id],
-      ['输出尺寸', run.image?.width && run.image?.height ? `${run.image.width} × ${run.image.height}` : '未生成'],
-      ['文件大小', typeof run.image?.byte_size === 'number' ? `${run.image.byte_size} 字节` : '未生成'], ['MIME', run.image?.mime_type],
-      ['SHA-256', run.image?.sha256], ['来源照片', (run.reference_photo_ids || []).join('、') || '未返回'],
-      ['计费提示', run.may_have_been_billed ? '生成请求可能产生费用；实际账单以Cloudflare为准' : '无'], ['错误码', run.error_code || '无'],
-    ]);
-    card.append(meta);
-    if (run.image) {
-      const image = element('img', 'comic-image'); image.alt = `${run.story_title || '漫画'}，${run.model}`; image.loading = 'lazy'; image.decoding = 'async';
-      image.src = run.image.path; image.addEventListener('error', () => { image.replaceWith(element('p', 'muted', '漫画图片读取失败')); }, { once: true });
-      card.append(image);
-    }
+  function photoPath(photo) {
+    return `/photo/${encodeURIComponent(photo.photo_id)}?user=${encodeURIComponent(state.user.user_id)}`;
+  }
+  function comicCard(comic) {
+    const card = element('article', 'comic-card');
+    card.append(element('h3', '', `${timestamp(comic.created_at_ms)} · ${comic.title ?? '未命名'}`));
+    card.append(metadata([
+      ['故事ID', comic.story_id], ['漫画ID', comic.run_id], ['模型', comic.model],
+      ['尺寸', comic.width && comic.height ? `${comic.width} × ${comic.height}` : '未知'],
+      ['供应商请求ID', comic.provider_request_id],
+    ]));
+    if (comic.summary) card.append(element('p', 'story-text', comic.summary));
+    const img = element('img', 'comic-image');
+    img.src = `/comic/${encodeURIComponent(comic.run_id)}?user=${encodeURIComponent(state.user.user_id)}`;
+    img.alt = comic.title ?? '漫画';
+    img.loading = 'lazy';
+    card.append(img);
     return card;
   }
   async function loadComics(more = false) {
     if (state.loading || !state.user || !state.range || state.view !== 'comics') return;
-    const epoch = state.epoch; const controller = state.controller ??= new AbortController(); state.loading = true;
-    ui['more-comics'].disabled = true; ui['retry-comics'].hidden = true; notice('加载漫画…');
+    const epoch = state.epoch;
+    const controller = state.controller ??= new AbortController();
+    state.loading = true; ui['more-comics'].disabled = true; ui['retry-comics'].hidden = true;
+    notice('加载漫画…');
     try {
       const query = new URLSearchParams({ user: state.user.user_id, date: state.range.date });
       if (more && state.comicCursor) query.set('cursor', state.comicCursor);
       const data = await json(`/api/comics?${query}`, { signal: controller.signal });
       if (epoch !== state.epoch) return;
       if (!more) { ui['comic-list'].replaceChildren(); state.comicCount = 0; }
-      for (const run of data.runs) ui['comic-list'].append(comicCard(run));
-      state.comicCount += data.runs.length; state.comicCursor = data.next_cursor;
+      for (const comic of data.comics) ui['comic-list'].append(comicCard(comic));
+      state.comicCount += data.comics.length; state.comicCursor = data.next_cursor;
       ui['more-comics'].hidden = !state.comicCursor;
-      ui['comics-status'].textContent = state.comicCount ? `已加载 ${state.comicCount} 条漫画记录 · 只读，不触发生成` : '该故事上传日期暂无漫画记录。'; notice();
+      ui['comic-status'].textContent = state.comicCount ? `已加载 ${state.comicCount} 个漫画 · 只读，不触发模型` : '该上传日期暂无已登记漫画。';
+      notice();
     } catch (error) { fail(error, epoch); if (epoch === state.epoch) { ui['retry-comics'].hidden = false; ui['retry-comics'].dataset.more = String(more); } }
     finally { if (epoch === state.epoch) { state.loading = false; ui['more-comics'].disabled = false; } }
-  }
-  function photoPath(photo) {
-    return `/photo/${encodeURIComponent(photo.photo_id)}?user=${encodeURIComponent(state.user.user_id)}`;
   }
   async function loadImage(media) {
     if (state.images.has(media) || state.view !== 'photos' || !ui['photo-grid'].contains(media)) return;
@@ -533,7 +564,7 @@
     }
   }
   function shiftDate(days) {
-    if (!ui.date.reportValidity()) return;
+    if (!ui.date.value || !ui.date.reportValidity()) return;
     const date = new Date(`${ui.date.value}T00:00:00Z`);
     date.setUTCDate(date.getUTCDate() + days);
     const value = date.toISOString().slice(0, 10);
@@ -584,14 +615,24 @@
     ui['end-time'].value = '23:59';
     applyFilters();
   });
-  ui['previous-page'].addEventListener('click', () => loadPage(state.pageIndex - 1));
-  ui['next-page'].addEventListener('click', () => loadPage(state.pageIndex + 1));
-  ui['retry-page'].addEventListener('click', () => loadPage(state.pageIndex));
+  ui['reset'].addEventListener('click', () => {
+    ui.date.value = '';
+    ui['start-time'].value = '00:00';
+    ui['end-time'].value = '23:59';
+    applyFilters();
+  });
+  ui['previous-page'].addEventListener('click', () => loadPage(state.page - 1));
+  ui['next-page'].addEventListener('click', () => loadPage(state.page + 1));
+  ui['retry-page'].addEventListener('click', () => loadPage(state.page));
+  ui['page-jump'].addEventListener('change', () => {
+    const p = Number(ui['page-jump'].value);
+    if (Number.isInteger(p) && p >= 1) loadPage(p);
+  });
   ui['close-lightbox'].addEventListener('click', () => ui.lightbox.close());
   ui.lightbox.addEventListener('close', clearLightbox);
   ui['close-info'].addEventListener('click', () => ui['info-dialog'].close());
   ui['info-dialog'].addEventListener('close', clearInfo);
-  ui.date.value = dateValue(Date.now());
+  ui.date.value = '';
   updateView();
   ui['login-button'].disabled = true;
   loadUsers(true).finally(() => { ui['login-button'].disabled = false; });

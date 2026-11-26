@@ -33,7 +33,7 @@
           <label id="date-label" for="date">拍摄日期</label>
           <div class="date-controls">
             <button id="previous-day" type="button" class="square" aria-label="前一天">‹</button>
-            <input id="date" type="date" min="0001-01-01" max="9998-12-31" required>
+            <input id="date" type="date" min="0001-01-01" max="9998-12-31">
             <button id="next-day" type="button" class="square" aria-label="后一天">›</button>
           </div>
         </div>
@@ -42,8 +42,9 @@
         <div class="field photo-filter"><label for="end-time">结束时间</label><input id="end-time" type="time" value="23:59" required></div>
         <button id="full-day" type="button" class="quiet photo-filter">全天</button>
         <button id="apply" type="submit" class="primary">筛选</button>
+        <button id="reset" type="button" class="secondary">重置</button>
         <button id="refresh" class="secondary" type="button">刷新</button>
-        <span id="zone-note" class="zone-note muted">UTC+8 · 含结束分钟</span>
+        <span id="zone-note" class="zone-note muted">默认显示全部 · 筛选后仅显示匹配照片</span>
       </form>
       <p id="notice" class="notice" role="status" aria-live="polite"></p>
       <section id="photos-panel" class="photo-panel" aria-labelledby="photos-title">
@@ -52,17 +53,12 @@
         <div id="photo-grid" class="photo-grid" aria-label="照片列表"></div>
         <div id="pager" class="pager" aria-label="照片分页" hidden>
           <button id="previous-page" class="secondary" type="button">上一页</button>
-          <span id="page-label" class="muted" aria-live="polite">第 1 页</span>
+          <nav id="page-numbers" class="page-numbers" aria-label="页码"></nav>
           <button id="next-page" class="secondary" type="button">下一页</button>
+          <span id="page-label" class="muted" aria-live="polite">共 0 张 · 1 页</span>
+          <label class="jump">跳至 <input id="page-jump" type="number" min="1" step="1" inputmode="numeric"></label>
         </div>
         <button id="retry-page" class="secondary" type="button" hidden>重试加载</button>
-      </section>
-      <section id="comics-panel" class="comic-panel" aria-labelledby="comics-title" hidden>
-        <div class="section-heading"><h2 id="comics-title">漫画</h2></div>
-        <p id="comics-status" class="muted" role="status"></p>
-        <div id="comic-list" aria-label="漫画生成记录"></div>
-        <div class="pager"><button id="more-comics" class="secondary" type="button" hidden>加载更多漫画</button>
-        <button id="retry-comics" class="secondary" type="button" hidden>重试漫画查询</button></div>
       </section>
       <section id="stories-panel" class="story-panel" aria-labelledby="stories-title" hidden>
         <div class="section-heading"><h2 id="stories-title">故事</h2></div>
@@ -70,6 +66,13 @@
         <div id="story-list" aria-label="故事生成批次"></div>
         <div class="pager"><button id="more-stories" class="secondary" type="button" hidden>加载更多批次</button>
         <button id="retry-stories" class="secondary" type="button" hidden>重试故事查询</button></div>
+      </section>
+      <section id="comics-panel" class="story-panel" aria-labelledby="comics-title" hidden>
+        <div class="section-heading"><h2 id="comics-title">漫画</h2></div>
+        <p id="comic-status" class="muted" role="status"></p>
+        <div id="comic-list" aria-label="漫画生成结果"></div>
+        <div class="pager"><button id="more-comics" class="secondary" type="button" hidden>加载更多漫画</button>
+        <button id="retry-comics" class="secondary" type="button" hidden>重试漫画查询</button></div>
       </section>
     </main>
   </div>

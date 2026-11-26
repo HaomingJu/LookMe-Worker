@@ -142,6 +142,7 @@ erDiagram
     }
     users {
         TEXT user_id PK,UK "NOT NULL"
+        TEXT username UK "nullable"
         TEXT status "NOT NULL"
         INTEGER created_at_ms "NOT NULL"
     }

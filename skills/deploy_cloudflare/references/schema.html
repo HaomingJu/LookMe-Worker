@@ -194,12 +194,13 @@ CREATE INDEX story_runs_owner_date ON story_runs(owner_id, story_date, created_a
   expires_at_ms INTEGER NOT NULL CHECK(expires_at_ms &gt; created_at_ms),
   revoked_at_ms INTEGER
 );
-CREATE INDEX user_tokens_user ON user_tokens(user_id)</pre></details></section><section id="users"><h2>users</h2><div class="scroll"><table><thead><tr><th>字段</th><th>类型</th><th>键</th><th>空值</th><th>默认值</th></tr></thead><tbody><tr><td><code>user_id</code></td><td>TEXT</td><td>PK UK</td><td>必填</td><td><code>—</code></td></tr><tr><td><code>status</code></td><td>TEXT</td><td></td><td>必填</td><td><code>&#x27;active&#x27;</code></td></tr><tr><td><code>created_at_ms</code></td><td>INTEGER</td><td></td><td>必填</td><td><code>—</code></td></tr></tbody></table></div><h3>唯一键（含复合键）</h3><ul><li><code>UNIQUE / PK (user_id)</code></li></ul><details><summary>完整表定义与索引 · 含 CHECK 约束</summary><pre>CREATE TABLE users (
+CREATE INDEX user_tokens_user ON user_tokens(user_id)</pre></details></section><section id="users"><h2>users</h2><div class="scroll"><table><thead><tr><th>字段</th><th>类型</th><th>键</th><th>空值</th><th>默认值</th></tr></thead><tbody><tr><td><code>user_id</code></td><td>TEXT</td><td>PK UK</td><td>必填</td><td><code>—</code></td></tr><tr><td><code>username</code></td><td>TEXT</td><td>UK</td><td>可空</td><td><code>—</code></td></tr><tr><td><code>status</code></td><td>TEXT</td><td></td><td>必填</td><td><code>&#x27;active&#x27;</code></td></tr><tr><td><code>created_at_ms</code></td><td>INTEGER</td><td></td><td>必填</td><td><code>—</code></td></tr></tbody></table></div><h3>唯一键（含复合键）</h3><ul><li><code>UNIQUE / PK (username)</code></li><li><code>UNIQUE / PK (user_id)</code></li></ul><details><summary>完整表定义与索引 · 含 CHECK 约束</summary><pre>CREATE TABLE users (
   user_id TEXT PRIMARY KEY NOT NULL,
+  username TEXT CHECK(username IS NULL OR (length(username) BETWEEN 1 AND 64 AND username NOT GLOB &#x27;*[^A-Za-z0-9_-]*&#x27;)),
   status TEXT NOT NULL DEFAULT &#x27;active&#x27; CHECK(status IN (&#x27;active&#x27;, &#x27;disabled&#x27;)),
   created_at_ms INTEGER NOT NULL
 );
-</pre></details></section><section><h2>Mermaid ER 源码</h2><pre>erDiagram
+CREATE UNIQUE INDEX users_username_unique ON users(username COLLATE NOCASE) WHERE username IS NOT NULL</pre></details></section><section><h2>Mermaid ER 源码</h2><pre>erDiagram
     comic_job_photos {
         TEXT owner_id FK &quot;NOT NULL&quot;
         TEXT job_id PK,FK &quot;NOT NULL&quot;
@@ -343,6 +344,7 @@ CREATE INDEX user_tokens_user ON user_tokens(user_id)</pre></details></section><
     }
     users {
         TEXT user_id PK,UK &quot;NOT NULL&quot;
+        TEXT username UK &quot;nullable&quot;
         TEXT status &quot;NOT NULL&quot;
         INTEGER created_at_ms &quot;NOT NULL&quot;
     }
@@ -357,4 +359,4 @@ CREATE INDEX user_tokens_user ON user_tokens(user_id)</pre></details></section><
     story_runs ||..o{ story_run_photos : &quot;owner_id, run_id / DELETE RESTRICT&quot;
     users ||..o{ story_runs : &quot;owner_id / DELETE RESTRICT&quot;
     users ||..o{ user_tokens : &quot;user_id / DELETE RESTRICT&quot;
-</pre></section><footer>来源 SHA-256：99a4d4f981ba83538215dae27860aca21ef67167881cc4d840074b1bb192385b<br>修改 schema.sql 后运行生成命令，或使用 --watch 自动重新生成。本页面为静态快照，已打开的页面需刷新；此工具不修改迁移或远端数据库。</footer></main></body></html>
+</pre></section><footer>来源 SHA-256：5f00bccdf9dffaed220de6878138e1a53dc4638d0a33f5d682256881f54ef5d4<br>修改 schema.sql 后运行生成命令，或使用 --watch 自动重新生成。本页面为静态快照，已打开的页面需刷新；此工具不修改迁移或远端数据库。</footer></main></body></html>

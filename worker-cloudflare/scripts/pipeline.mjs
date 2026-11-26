@@ -17,6 +17,7 @@ for (const dir of [uploadDir, consumerDir]) {
 if (!require) throw new Error('缺少锁定工具依赖：请先在Worker目录执行npm ci');
 const env = { ...process.env, WRANGLER_SEND_METRICS: 'false', WRANGLER_WRITE_LOGS: 'false' };
 const fail = message => { throw new Error(message); };
+const OWNER_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function loadAnalysisRuntime(configRoot = root) {
   const { build } = require('esbuild');
@@ -131,11 +132,13 @@ export function parseBackfillOptions(args) {
       values[key] = args[++i];
     }
   }
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(values['--owner'] ?? '')) fail('补跑必须指定有效owner UUID');
+  const owner = values['--owner'] ?? '';
+  if (OWNER_UUID.test(owner)) values['--owner'] = owner.toLowerCase();
+  else if (!/^[A-Za-z0-9_-]{1,64}$/.test(owner)) fail('补跑必须指定有效 owner（用户名或 UUID）');
   const limit = Number(values['--max-photos']);
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) fail('补跑必须指定1–100的max-photos上限');
   if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(values['--version'] ?? '')) fail('补跑必须显式指定分析版本');
-  return { owner: values['--owner'].toLowerCase(), version: values['--version'], limit, confirm: values['--confirm-model-calls'] === true };
+  return { owner: values['--owner'], version: values['--version'], limit, confirm: values['--confirm-model-calls'] === true };
 }
 
 export function backfillSelection(owner, version) {
@@ -152,14 +155,21 @@ async function remoteSql(config, sql) {
   if (!Array.isArray(results) || results.some(x => x.success !== true || !Array.isArray(x.results))) fail('D1未返回确认成功的查询结果；先核对远端，不盲重写');
   return results.flatMap(x => x.results);
 }
+async function resolveOwner(config, owner) {
+  if (OWNER_UUID.test(owner)) return owner;
+  const rows = await remoteSql(config, `SELECT user_id FROM users WHERE username = '${owner}' COLLATE NOCASE;`);
+  if (rows.length !== 1) fail('目标用户名不存在或不唯一');
+  return rows[0].user_id;
+}
 export async function backfill(config, options) {
   await config.analysis.getAnalysisProfile(options.version);
   if (!config.topology.automatic_analysis_enabled) fail('自动投递当前关闭，未补入新任务');
-  const selection = backfillSelection(options.owner, options.version);
+  const ownerId = await resolveOwner(config, options.owner);
+  const selection = backfillSelection(ownerId, options.version);
   const candidates = await remoteSql(config, `SELECT p.photo_id ${selection} ORDER BY p.uploaded_at_ms,p.photo_id LIMIT ${options.limit + 1}`);
   if (candidates.length > options.limit) fail('符合条件的图片数超过明确上限，未修改任何数据；请缩小范围或重新确认上限');
   if (candidates.some(x => !/^[0-9a-f-]{36}$/.test(x.photo_id))) fail('远端照片ID格式异常，停止');
-  console.log(JSON.stringify({ owner: options.owner, analysis_version: options.version, eligible_count: candidates.length,
+  console.log(JSON.stringify({ owner: ownerId, analysis_version: options.version, eligible_count: candidates.length,
     max_photos: options.limit, photo_ids: candidates.map(x => x.photo_id) }, null, 2));
   if (!options.confirm) { console.log('只读预览；确认推理额度/费用后加 --confirm-model-calls。'); return; }
   if (!candidates.length) { console.log('没有需要补投的照片；已有Outbox或分析记录不会重建。'); return; }
@@ -185,7 +195,7 @@ export async function main(args) {
     console.log('新增锁定版本：' + ((await lockNewProfiles()).join(', ') || '无'));
     return;
   }
-  if (!['check', 'plan', 'deploy-dev'].includes(command)) fail('用法：pipeline.mjs check|plan|lock-profiles|deploy-dev --confirm-dev|backfill --owner UUID --version VERSION --max-photos N [--confirm-model-calls]');
+  if (!['check', 'plan', 'deploy-dev'].includes(command)) fail('用法：pipeline.mjs check|plan|lock-profiles|deploy-dev --confirm-dev|backfill --owner 用户名或UUID --version VERSION --max-photos N [--confirm-model-calls]');
   if (options.some(x => x !== '--confirm-dev')) fail('未知参数');
   const config = await inspect();
   const summary = { account_id: config.upload.account_id, upload_worker: config.upload.name,
